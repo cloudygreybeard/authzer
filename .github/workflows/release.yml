@@ -1,0 +1,45 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+
+      - uses: goreleaser/goreleaser-action@v7
+        with:
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload install script
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ github.ref_name }}" hack/install.ps1 --clobber
+
+  update-tap:
+    needs: release
+    uses: cloudygreybeard/homebrew-tap/.github/workflows/release-homebrew-formula.yml@main
+    with:
+      package-name: authzer
+      binary-name: authzer
+      formula-class: Authzer
+      formula-desc: "Config-driven web access authz management via CDP"
+      artifact-style: goreleaser
+      private: true
+    secrets:
+      deploy-key: ${{ secrets.HOMEBREW_TAP_PRIVATE_DEPLOY_KEY }}
