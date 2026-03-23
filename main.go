@@ -12,18 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// authzer automates web-based access entitlement renewals via CDP.
+// authzer automates web-based access authz management via CDP.
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/cloudygreybeard/authzer/cmd"
 )
 
 func main() {
-	if err := cmd.Execute(); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	if err := cmd.Execute(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
