@@ -1,0 +1,29 @@
+apiVersion: authzer/v1alpha1
+kind: InspectResult
+data:
+    updated: "2026-04-08T12:00:00Z"
+    cdpEndpoint: http://127.0.0.1:9222
+    totalItems: 1
+    items:
+        - kind: Entitlement
+          id: test-res-1
+          selfLink: https://example.com/res/test-res-1
+          name: Test Resource One
+          status: Active
+          domains:
+            - example.com
+          description: A test resource for golden file validation.
+          primaryOwners: []
+          secondaryOwners: []
+          requestForm:
+            account: user@example.com
+            accountOptions:
+                - user@example.com
+            permissions:
+                - name: ReadOnly
+                  selected: true
+                - name: ReadWrite
+                  selected: false
+            hasTermsCheckbox: true
+            termsCheckboxLabel: I agree
+            hasJustificationField: true

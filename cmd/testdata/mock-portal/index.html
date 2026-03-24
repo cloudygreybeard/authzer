@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Mock Portal - Test Entitlement</title>
+  <style>
+    body { font-family: sans-serif; margin: 1em; font-size: 12px; }
+    h1 { margin: 0.2em 0; font-size: 16px; }
+    h2 { margin: 0.2em 0; font-size: 13px; }
+    p { margin: 0.1em 0; }
+    .dialog-overlay { display: none; position: fixed; top: 0; left: 0;
+      width: 100%; height: 100%; background: rgba(0,0,0,0.3); z-index: 10; }
+    .dialog-overlay.open { display: flex; justify-content: center; align-items: center; }
+    .dialog-box { background: #fff; padding: 1em; border-radius: 8px;
+      min-width: 300px; max-width: 500px; }
+    .option-btn { display: none; margin: 0.5em 0; }
+    .option-btn.visible { display: inline-block; }
+    .form-section { display: none; }
+    .form-section.visible { display: block; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Mock Test Resource</h1>
+  <p>Id : mock-res-001</p>
+  <p>Status : Active</p>
+  <p>Domain(s) : testdomain.example.com</p>
+  <h2>Description</h2>
+  <p>A mock resource for integration testing.</p>
+  <h2>Primary Owner(s)</h2>
+  <p>owner-a@example.com</p>
+  <h2>Secondary Owner(s)</h2>
+  <p>owner-b@example.com</p>
+  <h2>Custom Justification</h2>
+  <p>There are no custom justification requirements.</p>
+  <h2>Terms and Conditions</h2>
+  <p>You must agree to the test terms before proceeding.</p>
+  <button id="requestBtn">Request Membership</button>
+</main>
+
+<div class="dialog-overlay" id="dialogOverlay">
+  <div class="dialog-box" role="dialog" aria-label="Request Membership">
+    <h2>Request Membership</h2>
+    <button class="option-btn" id="forMyselfBtn">This Account</button>
+    <div class="form-section" id="formSection">
+      <label>Account</label>
+      <div role="combobox" aria-expanded="false">testuser@example.com</div>
+      <div role="option" style="display:none;">testuser@example.com</div>
+      <fieldset>
+        <legend>Permission</legend>
+        <div role="radio" aria-checked="true">ReadOnly</div>
+        <div role="radio" aria-checked="false">ReadWrite</div>
+        <div role="radio" aria-checked="false">Admin</div>
+      </fieldset>
+      <div role="checkbox" aria-checked="false">I agree to the terms and conditions</div>
+      <label>Justification</label>
+      <textarea aria-label="Justification" rows="2"></textarea>
+      <h3>Terms and Conditions</h3>
+      <p>You must comply with all applicable policies during the membership period.</p>
+      <div><button id="submitBtn">Submit</button></div>
+    </div>
+    <div><button id="cancelBtn">Cancel</button></div>
+  </div>
+</div>
+
+<script>
+  document.getElementById('requestBtn').addEventListener('click', () => {
+    document.getElementById('dialogOverlay').classList.add('open');
+    document.getElementById('forMyselfBtn').classList.add('visible');
+  });
+  document.getElementById('forMyselfBtn').addEventListener('click', () => {
+    document.getElementById('forMyselfBtn').classList.remove('visible');
+    document.getElementById('formSection').classList.add('visible');
+  });
+  document.getElementById('cancelBtn').addEventListener('click', () => {
+    document.getElementById('dialogOverlay').classList.remove('open');
+    document.getElementById('forMyselfBtn').classList.remove('visible');
+    document.getElementById('formSection').classList.remove('visible');
+  });
+  document.getElementById('submitBtn').addEventListener('click', () => {
+    window.__authzerSubmitted = true;
+    document.getElementById('dialogOverlay').classList.remove('open');
+    document.getElementById('formSection').classList.remove('visible');
+  });
+  for (const r of document.querySelectorAll('[role="radio"]')) {
+    r.addEventListener('click', () => {
+      for (const s of document.querySelectorAll('[role="radio"]')) {
+        s.setAttribute('aria-checked', 'false');
+      }
+      r.setAttribute('aria-checked', 'true');
+    });
+  }
+  document.querySelector('[role="checkbox"]').addEventListener('click', function() {
+    const cur = this.getAttribute('aria-checked') === 'true';
+    this.setAttribute('aria-checked', cur ? 'false' : 'true');
+  });
+</script>
+</body>
+</html>

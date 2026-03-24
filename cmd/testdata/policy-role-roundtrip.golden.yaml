@@ -1,0 +1,17 @@
+apiVersion: authzer/v1alpha1
+kind: Role
+metadata:
+    name: test-access
+    labels:
+        team: test
+    annotations:
+        description: Test role for golden file
+rules:
+    - kind: Entitlement
+      resource: res-1
+      selfLink: https://example.com/res-1
+      permission: ReadOnly
+    - kind: Entitlement
+      resource: res-2
+      selfLink: https://example.com/res-2
+      permission: ReadWrite
