@@ -330,6 +330,7 @@ type renewOpts struct {
 	Justification string
 	Permission    string
 	DryRun        string
+	AcceptTerms   bool
 }
 
 // selectPermission evaluates the portal.form.selectPermissionJs script to
@@ -396,8 +397,8 @@ func checkTerms(ctx context.Context) error {
 
 // renewResource navigates to a resource URL, opens the request dialog,
 // fills the form (permission, justification, T&Cs), and optionally
-// submits. In server dry-run mode, the tab is left open with the form
-// filled. In none mode, Submit is clicked and the tab is closed.
+// submits. In server dry-run mode, tabs are left open on both success
+// and failure so the user can inspect the portal state.
 func renewResource(ctx context.Context, url string, kind string, opts renewOpts) Resource {
 	res := Resource{Kind: kind, SelfLink: url}
 	logf := func(format string, args ...any) {
@@ -428,16 +429,23 @@ func renewResource(ctx context.Context, url string, kind string, opts renewOpts)
 		return res
 	}
 
+	leaveOpen := opts.DryRun == DryRunServer
+
 	logf("opening new tab")
 	tabCtx, tabCancel := newTab(ctx)
-	cancelTab := tabCancel
+
+	closeTab := func() {
+		if !leaveOpen {
+			tabCancel()
+		}
+	}
 
 	logf("navigating to %s", url)
 	if err := chromedp.Run(tabCtx,
 		chromedp.Navigate(url),
 		chromedp.WaitVisible(readySelector, chromedp.ByQuery),
 	); err != nil {
-		cancelTab()
+		closeTab()
 		res.Error = fmt.Sprintf("navigate: %v", err)
 		return res
 	}
@@ -447,13 +455,13 @@ func renewResource(ctx context.Context, url string, kind string, opts renewOpts)
 	logf("extracting page info")
 	var rawPage string
 	if err := chromedp.Run(tabCtx, chromedp.Evaluate(pageInfoJS, &rawPage)); err != nil {
-		cancelTab()
+		closeTab()
 		res.Error = fmt.Sprintf("page eval: %v", err)
 		return res
 	}
 	var pi pageInfoRaw
 	if err := json.Unmarshal([]byte(rawPage), &pi); err != nil {
-		cancelTab()
+		closeTab()
 		res.Error = fmt.Sprintf("page unmarshal: %v", err)
 		return res
 	}
@@ -465,12 +473,12 @@ func renewResource(ctx context.Context, url string, kind string, opts renewOpts)
 	logf("clicking %q", triggerText)
 	coords, err := findButton(tabCtx, triggerText)
 	if err != nil {
-		cancelTab()
+		closeTab()
 		res.Error = fmt.Sprintf("find %s: %v", triggerText, err)
 		return res
 	}
 	if err := dispatchClick(tabCtx, coords.X, coords.Y); err != nil {
-		cancelTab()
+		closeTab()
 		res.Error = fmt.Sprintf("click %s: %v", triggerText, err)
 		return res
 	}
@@ -479,7 +487,7 @@ func renewResource(ctx context.Context, url string, kind string, opts renewOpts)
 	if err := chromedp.Run(tabCtx,
 		chromedp.WaitVisible(dialogReadySelector, chromedp.ByQuery),
 	); err != nil {
-		cancelTab()
+		closeTab()
 		res.Error = fmt.Sprintf("wait dialog: %v", err)
 		return res
 	}
@@ -519,9 +527,11 @@ func renewResource(ctx context.Context, url string, kind string, opts renewOpts)
 		logf("justification: %v", err)
 	}
 
-	logf("checking T&Cs")
-	if err := checkTerms(tabCtx); err != nil {
-		logf("terms: %v", err)
+	if opts.AcceptTerms {
+		logf("checking T&Cs (--accept-terms)")
+		if err := checkTerms(tabCtx); err != nil {
+			logf("terms: %v", err)
+		}
 	}
 
 	if opts.DryRun == DryRunNone {
@@ -540,17 +550,17 @@ func renewResource(ctx context.Context, url string, kind string, opts renewOpts)
 		}
 		if submitErr != nil {
 			res.Error = fmt.Sprintf("submit button not found: %v", submitErr)
-			cancelTab()
+			tabCancel()
 			return res
 		}
 		if err := dispatchClick(tabCtx, submitCoords.X, submitCoords.Y); err != nil {
 			res.Error = fmt.Sprintf("submit click: %v", err)
-			cancelTab()
+			tabCancel()
 			return res
 		}
 		logf("submitted — closing tab")
 		time.Sleep(opts.SettleDelay)
-		cancelTab()
+		tabCancel()
 	} else {
 		logf("server dry-run: form filled, tab left open for review")
 	}
@@ -562,6 +572,9 @@ func renewResource(ctx context.Context, url string, kind string, opts renewOpts)
 // entitlement by name, clicks Renew, fills the justification, and
 // optionally submits. Each call opens its own tab so multiple renewals
 // can run concurrently despite the portal's one-at-a-time constraint.
+//
+// In server dry-run mode, tabs are left open on both success and failure
+// so the user can inspect the portal state.
 func renewMembership(ctx context.Context, name string, opts renewOpts) Resource {
 	res := Resource{Name: name}
 	logf := func(format string, args ...any) {
@@ -600,16 +613,23 @@ func renewMembership(ctx context.Context, name string, opts renewOpts) Resource 
 		return res
 	}
 
+	leaveOpen := opts.DryRun == DryRunServer
+
 	logf("opening new tab")
 	tabCtx, tabCancel := newTab(ctx)
-	cancelTab := tabCancel
+
+	closeTab := func() {
+		if !leaveOpen {
+			tabCancel()
+		}
+	}
 
 	logf("navigating to %s", membershipsURL)
 	if err := chromedp.Run(tabCtx,
 		chromedp.Navigate(membershipsURL),
 		chromedp.WaitVisible(tableReadySelector, chromedp.ByQuery),
 	); err != nil {
-		cancelTab()
+		closeTab()
 		res.Error = fmt.Sprintf("navigate memberships: %v", err)
 		return res
 	}
@@ -620,12 +640,12 @@ func renewMembership(ctx context.Context, name string, opts renewOpts) Resource 
 	js := fmt.Sprintf(selectJS, name)
 	var selected bool
 	if err := chromedp.Run(tabCtx, chromedp.Evaluate(js, &selected)); err != nil {
-		cancelTab()
+		closeTab()
 		res.Error = fmt.Sprintf("select checkbox: %v", err)
 		return res
 	}
 	if !selected {
-		cancelTab()
+		closeTab()
 		res.Error = fmt.Sprintf("checkbox for %q not found in memberships table", name)
 		return res
 	}
@@ -634,12 +654,12 @@ func renewMembership(ctx context.Context, name string, opts renewOpts) Resource 
 	logf("clicking %q", renewButtonText)
 	coords, err := findButton(tabCtx, renewButtonText)
 	if err != nil {
-		cancelTab()
+		closeTab()
 		res.Error = fmt.Sprintf("find %s: %v", renewButtonText, err)
 		return res
 	}
 	if err := dispatchClick(tabCtx, coords.X, coords.Y); err != nil {
-		cancelTab()
+		closeTab()
 		res.Error = fmt.Sprintf("click %s: %v", renewButtonText, err)
 		return res
 	}
@@ -648,7 +668,7 @@ func renewMembership(ctx context.Context, name string, opts renewOpts) Resource 
 	if err := chromedp.Run(tabCtx,
 		chromedp.WaitVisible(dialogReadySelector, chromedp.ByQuery),
 	); err != nil {
-		cancelTab()
+		closeTab()
 		res.Error = fmt.Sprintf("wait renew dialog: %v", err)
 		return res
 	}
@@ -656,28 +676,36 @@ func renewMembership(ctx context.Context, name string, opts renewOpts) Resource 
 
 	logf("filling justification")
 	if err := fillJustification(tabCtx, opts.Justification); err != nil {
-		cancelTab()
+		closeTab()
 		res.Error = fmt.Sprintf("justification: %v", err)
 		return res
 	}
 	time.Sleep(300 * time.Millisecond)
+
+	if opts.AcceptTerms {
+		logf("checking T&Cs (--accept-terms)")
+		if err := checkTerms(tabCtx); err != nil {
+			logf("terms: %v", err)
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
 
 	if opts.DryRun == DryRunNone {
 		logf("clicking renew submit")
 		submitCoords, err := findButton(tabCtx, renewButtonText)
 		if err != nil {
 			res.Error = fmt.Sprintf("renew submit button not found: %v", err)
-			cancelTab()
+			tabCancel()
 			return res
 		}
 		if err := dispatchClick(tabCtx, submitCoords.X, submitCoords.Y); err != nil {
 			res.Error = fmt.Sprintf("renew submit click: %v", err)
-			cancelTab()
+			tabCancel()
 			return res
 		}
 		logf("renewed — closing tab")
 		time.Sleep(opts.SettleDelay)
-		cancelTab()
+		tabCancel()
 	} else {
 		logf("server dry-run: justification filled, tab left open for review")
 	}
