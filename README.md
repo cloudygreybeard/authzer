@@ -104,6 +104,9 @@ authzer apply
 # Reconcile a single resource
 authzer apply foo-service
 
+# Reconcile: accept T&Cs checkboxes (T&Cs text shown in CLI output)
+authzer apply --accept-terms
+
 # Reconcile: full execution (fill, submit, close)
 authzer apply --dry-run=none
 
@@ -181,6 +184,25 @@ The shipped default is `server`. Users who are confident in their
 configuration and prefer fully automated renewals can set `dry-run: none`
 in their config and override with `--dry-run=server` when they want to
 review.
+
+### Terms and conditions
+
+Some portal resources require the user to accept terms and conditions via
+a checkbox. By default, `authzer apply` leaves these unticked— the
+reconciliation listing annotates affected resources with `[has T&Cs]`
+and leaves the tab open for manual review.
+
+To accept terms automatically, pass `--accept-terms`. The full T&Cs
+text from cached metadata is printed to stderr so the user can see
+exactly what they are agreeing to:
+
+```bash
+authzer apply --accept-terms
+```
+
+This follows the same explicit-consent pattern used by tools like Helm
+(`helm repo add --allow-deprecated-repos`) and Terraform
+(`terraform apply -auto-approve`).
 
 ### Config file
 

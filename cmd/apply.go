@@ -63,6 +63,8 @@ The dry-run mode controls execution depth:
 }
 
 func init() {
+	applyCmd.Flags().Bool("accept-terms", false,
+		"automatically accept terms and conditions checkboxes")
 	rootCmd.AddCommand(applyCmd)
 }
 
@@ -75,6 +77,7 @@ func runApply(cmd *cobra.Command, args []string) error {
 	verbose := viper.GetBool("verbose")
 	concurrency := viper.GetInt("concurrency")
 	renewWithinDays := viper.GetInt("renewWithinDays")
+	acceptTerms, _ := cmd.Flags().GetBool("accept-terms")
 
 	group, err := requireGroup()
 	if err != nil {
@@ -146,6 +149,8 @@ func runApply(cmd *cobra.Command, args []string) error {
 
 	detailsCache, _ := readCache(filepath.Join(cacheDir, "details-cache.yaml"))
 	nameByID := buildNameLookup(detailsCache)
+	termsLookup := buildTermsLookup(detailsCache)
+	termsTextLookup := buildTermsTextLookup(detailsCache)
 
 	var actionable []actionItem
 	var current, skipped int
@@ -153,6 +158,13 @@ func runApply(cmd *cobra.Command, args []string) error {
 	threshold := time.Now().AddDate(0, 0, renewWithinDays)
 	claimedNames := make(map[string]bool, len(rules))
 	n := 0
+
+	termsNote := func(name string) string {
+		if termsLookup[name] {
+			return " [has T&Cs]"
+		}
+		return ""
+	}
 
 	for _, rule := range rules {
 		n++
@@ -163,8 +175,8 @@ func runApply(cmd *cobra.Command, args []string) error {
 			claimedNames[m.Name] = true
 			expiresWithin := isExpiringWithin(m.ExpirationDate, threshold)
 			if expiresWithin || m.Expiring {
-				fmt.Fprintf(os.Stderr, "  [%d] %s — EXTEND (expires %s)\n",
-					n, m.Name, m.ExpirationDate)
+				fmt.Fprintf(os.Stderr, "  [%d] %s — EXTEND (expires %s)%s\n",
+					n, m.Name, m.ExpirationDate, termsNote(m.Name))
 				actionable = append(actionable, actionItem{
 					rule: rule, membership: m, action: "renew",
 				})
@@ -184,8 +196,8 @@ func runApply(cmd *cobra.Command, args []string) error {
 				skipped++
 				continue
 			}
-			fmt.Fprintf(os.Stderr, "  [%d] %s — REQUEST (not in current memberships)\n",
-				n, name)
+			fmt.Fprintf(os.Stderr, "  [%d] %s — REQUEST (not in current memberships)%s\n",
+				n, name, termsNote(name))
 			actionable = append(actionable, actionItem{
 				rule: rule, action: "request",
 			})
@@ -201,8 +213,8 @@ func runApply(cmd *cobra.Command, args []string) error {
 		n++
 		expiresWithin := isExpiringWithin(m.ExpirationDate, threshold)
 		if expiresWithin || m.Expiring {
-			fmt.Fprintf(os.Stderr, "  [%d] %s — EXTEND undeclared (expires %s)\n",
-				n, m.Name, m.ExpirationDate)
+			fmt.Fprintf(os.Stderr, "  [%d] %s — EXTEND undeclared (expires %s)%s\n",
+				n, m.Name, m.ExpirationDate, termsNote(m.Name))
 			actionable = append(actionable, actionItem{
 				membership: m, action: "renew",
 			})
@@ -220,6 +232,23 @@ func runApply(cmd *cobra.Command, args []string) error {
 	fmt.Fprintf(os.Stderr, "Renew: %d  Request: %d  Current: %d  Skipped: %d\n",
 		countAction(actionable, "renew"), countAction(actionable, "request"),
 		current, skipped)
+
+	if !acceptTerms {
+		hasAnyTerms := false
+		for _, it := range actionable {
+			name := it.rule.Resource
+			if it.membership != nil {
+				name = it.membership.Name
+			}
+			if termsLookup[name] {
+				hasAnyTerms = true
+				break
+			}
+		}
+		if hasAnyTerms {
+			fmt.Fprintf(os.Stderr, "\nNote: some resources have T&Cs. Pass --accept-terms to tick checkboxes automatically.\n")
+		}
+	}
 
 	if len(actionable) == 0 {
 		fmt.Fprintf(os.Stderr, "\nAll memberships are current. Nothing to do.\n")
@@ -254,6 +283,7 @@ loop:
 				Permission:    it.rule.Permission,
 				Justification: justification,
 				DryRun:        mode,
+				AcceptTerms:   acceptTerms,
 			}
 
 			var res Resource
@@ -275,15 +305,32 @@ loop:
 			if it.membership != nil {
 				label = it.membership.Name
 			}
+			if termsText := termsTextLookup[label]; termsText != "" && termsLookup[label] {
+				if acceptTerms {
+					fmt.Fprintf(os.Stderr, "  [%d/%d] %s/%s T&Cs: %s\n",
+						n, totalActions, it.action, label, termsText)
+				}
+			}
 			if res.Error != "" {
-				fmt.Fprintf(os.Stderr, "  [%d/%d] %s/%s … FAILED (%s)\n",
-					n, totalActions, it.action, label, res.Error)
+				if mode == DryRunServer {
+					fmt.Fprintf(os.Stderr, "  [%d/%d] %s/%s … FAILED, tab open (%s)\n",
+						n, totalActions, it.action, label, res.Error)
+				} else {
+					fmt.Fprintf(os.Stderr, "  [%d/%d] %s/%s … FAILED (%s)\n",
+						n, totalActions, it.action, label, res.Error)
+				}
 				failed++
 			} else {
 				switch mode {
 				case DryRunServer:
-					fmt.Fprintf(os.Stderr, "  [%d/%d] %s/%s … prepared (tab open)\n",
-						n, totalActions, it.action, label)
+					hasTerms := termsLookup[label]
+					if hasTerms && !acceptTerms {
+						fmt.Fprintf(os.Stderr, "  [%d/%d] %s/%s … prepared, terms not accepted (tab open)\n",
+							n, totalActions, it.action, label)
+					} else {
+						fmt.Fprintf(os.Stderr, "  [%d/%d] %s/%s … prepared (tab open)\n",
+							n, totalActions, it.action, label)
+					}
 				case DryRunNone:
 					fmt.Fprintf(os.Stderr, "  [%d/%d] %s/%s … done\n",
 						n, totalActions, it.action, label)
@@ -324,11 +371,19 @@ func runApplyClient(rules []Rule, justification string, renewWithinDays int) err
 
 	detailsCache, _ := readCache(filepath.Join(cacheDir, "details-cache.yaml"))
 	nameByID := buildNameLookup(detailsCache)
+	termsLookup := buildTermsLookup(detailsCache)
 
 	threshold := time.Now().AddDate(0, 0, renewWithinDays)
 	var extendCount, requestCount, currentCount, undeclared int
 	claimedNames := make(map[string]bool, len(rules))
 	n := 0
+
+	termsNote := func(name string) string {
+		if termsLookup[name] {
+			return " [has T&Cs]"
+		}
+		return ""
+	}
 
 	for _, rule := range rules {
 		n++
@@ -338,8 +393,8 @@ func runApplyClient(rules []Rule, justification string, renewWithinDays int) err
 			claimedNames[m.Name] = true
 			expiresWithin := isExpiringWithin(m.ExpirationDate, threshold)
 			if expiresWithin || m.Expiring {
-				fmt.Fprintf(os.Stderr, "  [%d] %s — would EXTEND (expires %s)\n",
-					n, m.Name, m.ExpirationDate)
+				fmt.Fprintf(os.Stderr, "  [%d] %s — would EXTEND (expires %s)%s\n",
+					n, m.Name, m.ExpirationDate, termsNote(m.Name))
 				extendCount++
 			} else {
 				fmt.Fprintf(os.Stderr, "  [%d] %s — current (expires %s)\n",
@@ -351,8 +406,8 @@ func runApplyClient(rules []Rule, justification string, renewWithinDays int) err
 			if name == "" {
 				name = rule.SelfLink
 			}
-			fmt.Fprintf(os.Stderr, "  [%d] %s — would REQUEST (not in memberships)\n",
-				n, name)
+			fmt.Fprintf(os.Stderr, "  [%d] %s — would REQUEST (not in memberships)%s\n",
+				n, name, termsNote(name))
 			requestCount++
 		}
 	}
@@ -365,8 +420,8 @@ func runApplyClient(rules []Rule, justification string, renewWithinDays int) err
 		n++
 		expiresWithin := isExpiringWithin(m.ExpirationDate, threshold)
 		if expiresWithin || m.Expiring {
-			fmt.Fprintf(os.Stderr, "  [%d] %s — would EXTEND undeclared (expires %s)\n",
-				n, m.Name, m.ExpirationDate)
+			fmt.Fprintf(os.Stderr, "  [%d] %s — would EXTEND undeclared (expires %s)%s\n",
+				n, m.Name, m.ExpirationDate, termsNote(m.Name))
 			extendCount++
 		} else {
 			fmt.Fprintf(os.Stderr, "  [%d] %s — current, undeclared (expires %s)\n",
@@ -397,6 +452,35 @@ func buildNameLookup(details []Resource) map[string]string {
 	for _, d := range details {
 		if d.ID != "" && d.Name != "" {
 			m[d.ID] = d.Name
+		}
+	}
+	return m
+}
+
+// buildTermsLookup creates a map from resource name to whether the
+// resource has a T&Cs checkbox, using cached deep survey data.
+func buildTermsLookup(details []Resource) map[string]bool {
+	m := make(map[string]bool, len(details))
+	for _, d := range details {
+		if d.Name != "" && d.RequestForm != nil && d.RequestForm.HasTermsCheckbox {
+			m[d.Name] = true
+		}
+	}
+	return m
+}
+
+// buildTermsTextLookup creates a map from resource name to the T&Cs
+// text content, using cached deep survey data.
+func buildTermsTextLookup(details []Resource) map[string]string {
+	m := make(map[string]string, len(details))
+	for _, d := range details {
+		if d.Name == "" {
+			continue
+		}
+		if d.RequestForm != nil && d.RequestForm.TermsText != "" {
+			m[d.Name] = d.RequestForm.TermsText
+		} else if d.TermsAndConditions != nil && *d.TermsAndConditions != "" {
+			m[d.Name] = *d.TermsAndConditions
 		}
 	}
 	return m
