@@ -74,7 +74,7 @@ func runDescribe(cmd *cobra.Command, args []string) error {
 	w := os.Stdout
 	for i, res := range details {
 		if i > 0 {
-			fmt.Fprintln(w)
+			_, _ = fmt.Fprintln(w)
 		}
 		printResource(w, res, membershipByID[res.ID])
 	}
@@ -97,19 +97,19 @@ func filterDetails(details []Resource, args []string) []Resource {
 func printResource(w io.Writer, r Resource, m *Membership) {
 	field := func(label, value string) {
 		if value != "" {
-			fmt.Fprintf(w, "%-20s%s\n", label+":", value)
+			_, _ = fmt.Fprintf(w, "%-20s%s\n", label+":", value)
 		}
 	}
 	fieldList := func(label string, values []string) {
 		if len(values) == 0 {
-			fmt.Fprintf(w, "%-20s<none>\n", label+":")
+			_, _ = fmt.Fprintf(w, "%-20s<none>\n", label+":")
 			return
 		}
 		for i, v := range values {
 			if i == 0 {
-				fmt.Fprintf(w, "%-20s%s\n", label+":", v)
+				_, _ = fmt.Fprintf(w, "%-20s%s\n", label+":", v)
 			} else {
-				fmt.Fprintf(w, "%-20s%s\n", "", v)
+				_, _ = fmt.Fprintf(w, "%-20s%s\n", "", v)
 			}
 		}
 	}
@@ -132,60 +132,60 @@ func printResource(w io.Writer, r Resource, m *Membership) {
 	}
 
 	if r.Description != "" {
-		fmt.Fprintf(w, "%-20s%s\n", "Description:", r.Description)
+		_, _ = fmt.Fprintf(w, "%-20s%s\n", "Description:", r.Description)
 	}
 
-	fmt.Fprintln(w)
+	_, _ = fmt.Fprintln(w)
 	fieldList("Primary Owners", r.PrimaryOwners)
 	fieldList("Secondary Owners", r.SecondaryOwners)
 
 	if r.CustomJustification != nil {
-		fmt.Fprintln(w)
+		_, _ = fmt.Fprintln(w)
 		field("Custom Justification", *r.CustomJustification)
 	}
 
 	if r.TermsAndConditions != nil {
-		fmt.Fprintln(w)
-		fmt.Fprintf(w, "Terms and Conditions:\n")
+		_, _ = fmt.Fprintln(w)
+		_, _ = fmt.Fprintf(w, "Terms and Conditions:\n")
 		for _, line := range strings.Split(*r.TermsAndConditions, "\n") {
-			fmt.Fprintf(w, "  %s\n", line)
+			_, _ = fmt.Fprintf(w, "  %s\n", line)
 		}
 	}
 
 	if r.RequestForm != nil {
 		f := r.RequestForm
-		fmt.Fprintln(w)
-		fmt.Fprintf(w, "Request Form:\n")
-		fmt.Fprintf(w, "  %-18s%s\n", "Account:", f.Account)
+		_, _ = fmt.Fprintln(w)
+		_, _ = fmt.Fprintf(w, "Request Form:\n")
+		_, _ = fmt.Fprintf(w, "  %-18s%s\n", "Account:", f.Account)
 		if len(f.AccountOptions) > 1 {
-			fmt.Fprintf(w, "  %-18s%s\n", "Account Options:", strings.Join(f.AccountOptions, ", "))
+			_, _ = fmt.Fprintf(w, "  %-18s%s\n", "Account Options:", strings.Join(f.AccountOptions, ", "))
 		}
-		fmt.Fprintf(w, "  Permissions:\n")
+		_, _ = fmt.Fprintf(w, "  Permissions:\n")
 		for _, p := range f.Permissions {
 			marker := "  "
 			if p.Selected {
 				marker = "* "
 			}
-			fmt.Fprintf(w, "    %s%s\n", marker, p.Name)
+			_, _ = fmt.Fprintf(w, "    %s%s\n", marker, p.Name)
 		}
-		fmt.Fprintf(w, "  %-18s%v\n", "Terms Checkbox:", f.HasTermsCheckbox)
-		fmt.Fprintf(w, "  %-18s%v\n", "Justification:", f.HasJustification)
+		_, _ = fmt.Fprintf(w, "  %-18s%v\n", "Terms Checkbox:", f.HasTermsCheckbox)
+		_, _ = fmt.Fprintf(w, "  %-18s%v\n", "Justification:", f.HasJustification)
 	}
 
 	if m != nil {
-		fmt.Fprintln(w)
-		fmt.Fprintf(w, "Current Membership:\n")
-		fmt.Fprintf(w, "  %-18s%s\n", "Role:", m.Role)
-		fmt.Fprintf(w, "  %-18s%s\n", "Expires:", m.ExpirationDate)
+		_, _ = fmt.Fprintln(w)
+		_, _ = fmt.Fprintf(w, "Current Membership:\n")
+		_, _ = fmt.Fprintf(w, "  %-18s%s\n", "Role:", m.Role)
+		_, _ = fmt.Fprintf(w, "  %-18s%s\n", "Expires:", m.ExpirationDate)
 		status := "current"
 		if m.Expiring {
 			status = "expiring"
 		}
-		fmt.Fprintf(w, "  %-18s%s\n", "Status:", status)
+		_, _ = fmt.Fprintf(w, "  %-18s%s\n", "Status:", status)
 	}
 
 	if r.Error != "" {
-		fmt.Fprintln(w)
-		fmt.Fprintf(w, "Error: %s\n", r.Error)
+		_, _ = fmt.Fprintln(w)
+		_, _ = fmt.Fprintf(w, "Error: %s\n", r.Error)
 	}
 }
