@@ -311,9 +311,9 @@ func formatTable(items []Membership, wide bool) []byte {
 	w := tabwriter.NewWriter(&sb, 0, 4, 2, ' ', 0)
 
 	if wide {
-		fmt.Fprintln(w, "NAME\tROLE\tACCOUNT\tEXPIRES\tID\tSTATUS")
+		fmt.Fprintln(w, "NAME\tID\tROLE\tACCOUNT\tEXPIRES\tSTATUS")
 	} else {
-		fmt.Fprintln(w, "NAME\tROLE\tEXPIRES\tSTATUS")
+		fmt.Fprintln(w, "NAME\tID\tROLE\tEXPIRES\tSTATUS")
 	}
 
 	for _, m := range items {
@@ -324,10 +324,10 @@ func formatTable(items []Membership, wide bool) []byte {
 		expires := m.ExpirationDate
 		if wide {
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
-				m.Name, m.Role, m.Account, expires, m.ID, status)
+				m.Name, m.ID, m.Role, m.Account, expires, status)
 		} else {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
-				m.Name, m.Role, expires, status)
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
+				m.Name, m.ID, m.Role, expires, status)
 		}
 	}
 	_ = w.Flush()
@@ -456,6 +456,7 @@ func printComplianceSummary(memberships []Membership, details []Resource) {
 	} else {
 		fmt.Fprintf(os.Stderr, "  Missing:    0 (all policy resources present)\n")
 	}
+	fmt.Fprintln(os.Stderr)
 }
 
 func writeMembershipsCache(path string, memberships []Membership) error {

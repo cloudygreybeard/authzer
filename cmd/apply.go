@@ -205,25 +205,27 @@ func runApply(cmd *cobra.Command, args []string) error {
 	}
 
 	var undeclared int
-	for i := range memberships {
-		m := &memberships[i]
-		if claimedNames[m.Name] {
-			continue
+	if len(args) == 0 {
+		for i := range memberships {
+			m := &memberships[i]
+			if claimedNames[m.Name] {
+				continue
+			}
+			n++
+			expiresWithin := isExpiringWithin(m.ExpirationDate, threshold)
+			if expiresWithin || m.Expiring {
+				fmt.Fprintf(os.Stderr, "  [%d] %s — EXTEND undeclared (expires %s)%s\n",
+					n, m.Name, m.ExpirationDate, termsNote(m.Name))
+				actionable = append(actionable, actionItem{
+					membership: m, action: "renew",
+				})
+			} else {
+				fmt.Fprintf(os.Stderr, "  [%d] %s — current, undeclared (expires %s)\n",
+					n, m.Name, m.ExpirationDate)
+				current++
+			}
+			undeclared++
 		}
-		n++
-		expiresWithin := isExpiringWithin(m.ExpirationDate, threshold)
-		if expiresWithin || m.Expiring {
-			fmt.Fprintf(os.Stderr, "  [%d] %s — EXTEND undeclared (expires %s)%s\n",
-				n, m.Name, m.ExpirationDate, termsNote(m.Name))
-			actionable = append(actionable, actionItem{
-				membership: m, action: "renew",
-			})
-		} else {
-			fmt.Fprintf(os.Stderr, "  [%d] %s — current, undeclared (expires %s)\n",
-				n, m.Name, m.ExpirationDate)
-			current++
-		}
-		undeclared++
 	}
 
 	fmt.Fprintf(os.Stderr, "\n────────────────────────────────\n")
