@@ -770,6 +770,7 @@ func listMemberships(ctx context.Context, opts surveyOpts) ([]Membership, error)
 	for i := range memberships {
 		memberships[i].Name = cleanText(memberships[i].Name)
 		memberships[i].ID = cleanText(memberships[i].ID)
+		memberships[i].SelfLink = strings.TrimSpace(memberships[i].SelfLink)
 		memberships[i].Account = cleanText(memberships[i].Account)
 		memberships[i].Role = cleanText(memberships[i].Role)
 		memberships[i].ExpirationDate = cleanText(memberships[i].ExpirationDate)

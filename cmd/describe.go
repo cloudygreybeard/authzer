@@ -119,6 +119,13 @@ func printResource(w io.Writer, r Resource, m *Membership) {
 	field("Kind", r.Kind)
 	field("Status", r.Status)
 	field("Link", r.SelfLink)
+	if r.Managed != nil {
+		if *r.Managed {
+			field("Managed", "yes (declared in policy)")
+		} else {
+			field("Managed", "no (not declared in policy)")
+		}
+	}
 
 	if len(r.Domains) > 0 {
 		field("Domains", strings.Join(r.Domains, ", "))

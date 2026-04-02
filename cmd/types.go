@@ -137,6 +137,7 @@ type Resource struct {
 	ID                  string       `yaml:"id" json:"id"`
 	SelfLink            string       `yaml:"selfLink" json:"selfLink"`
 	Name                string       `yaml:"name" json:"name"`
+	Managed             *bool        `yaml:"managed,omitempty" json:"managed,omitempty"`
 	Status              string       `yaml:"status" json:"status"`
 	Domains             []string     `yaml:"domains" json:"domains"`
 	Description         string       `yaml:"description" json:"description"`
