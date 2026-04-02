@@ -23,6 +23,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+	"gopkg.in/yaml.v3"
 )
 
 // Version information set via ldflags at build time.
@@ -121,6 +122,7 @@ func allURLArgs(args []string) bool {
 
 // filterRules narrows a resolved rule set to only those matching the
 // given positional arguments. Each arg is matched against Rule.Resource
+// (slug ID) and the display name from the details cache
 // (case-insensitive). If an arg looks like a URL it is treated as an
 // ad-hoc rule with no policy context. Returns an error if any arg
 // matched nothing.
@@ -129,9 +131,25 @@ func filterRules(rules []Rule, args []string) ([]Rule, error) {
 		return rules, nil
 	}
 
+	cacheDir := cacheDirectory()
+	var details []Resource
+	if data, readErr := os.ReadFile(filepath.Join(cacheDir, "details-cache.yaml")); readErr == nil {
+		_ = yaml.Unmarshal(data, &details)
+	}
+	nameByID := make(map[string]string, len(details))
+	for _, d := range details {
+		if d.ID != "" && d.Name != "" {
+			nameByID[d.ID] = d.Name
+		}
+	}
+
 	byResource := make(map[string]Rule, len(rules))
+	byName := make(map[string]Rule, len(rules))
 	for _, r := range rules {
 		byResource[strings.ToLower(r.Resource)] = r
+		if name := nameByID[r.Resource]; name != "" {
+			byName[strings.ToLower(name)] = r
+		}
 	}
 
 	var filtered []Rule
@@ -141,7 +159,10 @@ func filterRules(rules []Rule, args []string) ([]Rule, error) {
 			filtered = append(filtered, Rule{SelfLink: arg})
 			continue
 		}
-		if r, ok := byResource[strings.ToLower(arg)]; ok {
+		lower := strings.ToLower(arg)
+		if r, ok := byResource[lower]; ok {
+			filtered = append(filtered, r)
+		} else if r, ok := byName[lower]; ok {
 			filtered = append(filtered, r)
 		} else {
 			missing = append(missing, arg)
