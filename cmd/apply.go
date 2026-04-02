@@ -257,92 +257,119 @@ func runApply(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	sem := make(chan struct{}, concurrency)
-	var mu sync.Mutex
-	var wg sync.WaitGroup
+	var renewals, requests []actionItem
+	for _, it := range actionable {
+		switch it.action {
+		case "renew":
+			renewals = append(renewals, it)
+		default:
+			requests = append(requests, it)
+		}
+	}
+
 	var completed atomic.Int32
 	var succeeded, failed int
 	totalActions := len(actionable)
 
-loop:
-	for _, item := range actionable {
+	reportResult := func(it actionItem, res Resource) {
+		n := completed.Add(1)
+		label := it.rule.Resource
+		if it.membership != nil {
+			label = it.membership.Name
+		}
+		if termsText := termsTextLookup[label]; termsText != "" && termsLookup[label] {
+			if acceptTerms {
+				fmt.Fprintf(os.Stderr, "  [%d/%d] %s/%s T&Cs: %s\n",
+					n, totalActions, it.action, label, termsText)
+			}
+		}
+		if res.Error != "" {
+			if mode == DryRunServer {
+				fmt.Fprintf(os.Stderr, "  [%d/%d] %s/%s … FAILED, tab open (%s)\n",
+					n, totalActions, it.action, label, res.Error)
+			} else {
+				fmt.Fprintf(os.Stderr, "  [%d/%d] %s/%s … FAILED (%s)\n",
+					n, totalActions, it.action, label, res.Error)
+			}
+			failed++
+		} else {
+			switch mode {
+			case DryRunServer:
+				hasTerms := termsLookup[label]
+				if hasTerms && !acceptTerms {
+					fmt.Fprintf(os.Stderr, "  [%d/%d] %s/%s … prepared, terms not accepted (tab open)\n",
+						n, totalActions, it.action, label)
+				} else {
+					fmt.Fprintf(os.Stderr, "  [%d/%d] %s/%s … prepared (tab open)\n",
+						n, totalActions, it.action, label)
+				}
+			case DryRunNone:
+				fmt.Fprintf(os.Stderr, "  [%d/%d] %s/%s … done\n",
+					n, totalActions, it.action, label)
+			}
+			succeeded++
+		}
+	}
+
+	for _, it := range renewals {
 		select {
-		case sem <- struct{}{}:
 		case <-ctx.Done():
 			fmt.Fprintf(os.Stderr, "\nAborted.\n")
-			break loop
+			goto done
+		default:
 		}
 
-		wg.Add(1)
-		go func(it actionItem) {
-			defer wg.Done()
-			defer func() { <-sem }()
+		rOpts := renewOpts{
+			SettleDelay:   settleDelay,
+			Timeout:       timeout,
+			Verbose:       verbose,
+			Justification: justification,
+			DryRun:        mode,
+			AcceptTerms:   acceptTerms,
+		}
+		res := renewMembership(browserCtx, it.membership.Name, rOpts)
+		reportResult(it, res)
+	}
 
-			rOpts := renewOpts{
-				SettleDelay:   settleDelay,
-				Timeout:       timeout,
-				Verbose:       verbose,
-				Permission:    it.rule.Permission,
-				Justification: justification,
-				DryRun:        mode,
-				AcceptTerms:   acceptTerms,
+	{
+		sem := make(chan struct{}, concurrency)
+		var wg sync.WaitGroup
+
+	requestLoop:
+		for _, item := range requests {
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				fmt.Fprintf(os.Stderr, "\nAborted.\n")
+				break requestLoop
 			}
 
-			var res Resource
-			switch it.action {
-			case "renew":
-				name := it.membership.Name
-				res = renewMembership(browserCtx, name, rOpts)
-			case "request":
+			wg.Add(1)
+			go func(it actionItem) {
+				defer wg.Done()
+				defer func() { <-sem }()
+
+				rOpts := renewOpts{
+					SettleDelay:   settleDelay,
+					Timeout:       timeout,
+					Verbose:       verbose,
+					Permission:    it.rule.Permission,
+					Justification: justification,
+					DryRun:        mode,
+					AcceptTerms:   acceptTerms,
+				}
 				kind := it.rule.Kind
 				if kind == "" {
 					kind = "Resource"
 				}
-				res = renewResource(browserCtx, it.rule.SelfLink, kind, rOpts)
-			}
-
-			n := completed.Add(1)
-			mu.Lock()
-			label := it.rule.Resource
-			if it.membership != nil {
-				label = it.membership.Name
-			}
-			if termsText := termsTextLookup[label]; termsText != "" && termsLookup[label] {
-				if acceptTerms {
-					fmt.Fprintf(os.Stderr, "  [%d/%d] %s/%s T&Cs: %s\n",
-						n, totalActions, it.action, label, termsText)
-				}
-			}
-			if res.Error != "" {
-				if mode == DryRunServer {
-					fmt.Fprintf(os.Stderr, "  [%d/%d] %s/%s … FAILED, tab open (%s)\n",
-						n, totalActions, it.action, label, res.Error)
-				} else {
-					fmt.Fprintf(os.Stderr, "  [%d/%d] %s/%s … FAILED (%s)\n",
-						n, totalActions, it.action, label, res.Error)
-				}
-				failed++
-			} else {
-				switch mode {
-				case DryRunServer:
-					hasTerms := termsLookup[label]
-					if hasTerms && !acceptTerms {
-						fmt.Fprintf(os.Stderr, "  [%d/%d] %s/%s … prepared, terms not accepted (tab open)\n",
-							n, totalActions, it.action, label)
-					} else {
-						fmt.Fprintf(os.Stderr, "  [%d/%d] %s/%s … prepared (tab open)\n",
-							n, totalActions, it.action, label)
-					}
-				case DryRunNone:
-					fmt.Fprintf(os.Stderr, "  [%d/%d] %s/%s … done\n",
-						n, totalActions, it.action, label)
-				}
-				succeeded++
-			}
-			mu.Unlock()
-		}(item)
+				res := renewResource(browserCtx, it.rule.SelfLink, kind, rOpts)
+				reportResult(it, res)
+			}(item)
+		}
+		wg.Wait()
 	}
-	wg.Wait()
+
+done:
 
 	fmt.Fprintf(os.Stderr, "\n────────────────────────────────\n")
 	switch mode {

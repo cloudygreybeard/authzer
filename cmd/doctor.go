@@ -114,7 +114,7 @@ func runDoctor(cmd *cobra.Command, _ []string) error {
 	client := &http.Client{Timeout: 3 * time.Second}
 	resp, err := client.Get(endpoint + "/json/version")
 	if err == nil && resp.StatusCode == http.StatusOK {
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		var version struct {
 			Browser  string `json:"Browser"`
 			Protocol string `json:"Protocol-Version"`

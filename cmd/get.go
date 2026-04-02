@@ -214,11 +214,12 @@ func surveyResources(ctx context.Context, rules []Rule, opts surveyOpts, concurr
 	var wg sync.WaitGroup
 	total := len(rules)
 
+surveyLoop:
 	for i, rule := range rules {
 		select {
 		case sem <- struct{}{}:
 		case <-ctx.Done():
-			break
+			break surveyLoop
 		}
 
 		wg.Add(1)
@@ -311,9 +312,9 @@ func formatTable(items []Membership, wide bool) []byte {
 	w := tabwriter.NewWriter(&sb, 0, 4, 2, ' ', 0)
 
 	if wide {
-		fmt.Fprintln(w, "NAME\tID\tROLE\tACCOUNT\tEXPIRES\tSTATUS")
+		_, _ = fmt.Fprintln(w, "NAME\tID\tROLE\tACCOUNT\tEXPIRES\tSTATUS")
 	} else {
-		fmt.Fprintln(w, "NAME\tID\tROLE\tEXPIRES\tSTATUS")
+		_, _ = fmt.Fprintln(w, "NAME\tID\tROLE\tEXPIRES\tSTATUS")
 	}
 
 	for _, m := range items {
@@ -323,10 +324,10 @@ func formatTable(items []Membership, wide bool) []byte {
 		}
 		expires := m.ExpirationDate
 		if wide {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
+			_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
 				m.Name, m.ID, m.Role, m.Account, expires, status)
 		} else {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
+			_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
 				m.Name, m.ID, m.Role, expires, status)
 		}
 	}
