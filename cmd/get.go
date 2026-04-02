@@ -15,6 +15,7 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -133,7 +134,40 @@ func runGet(cmd *cobra.Command, args []string) error {
 		}
 
 		fmt.Fprintf(os.Stderr, "\nCollecting deep metadata for %d policy resources…\n", len(rules))
-		details = surveyResources(browserCtx, rules, opts, concurrency)
+		managed := surveyResources(browserCtx, rules, opts, concurrency)
+		boolTrue := true
+		for i := range managed {
+			managed[i].Managed = &boolTrue
+		}
+
+		managedIDs := make(map[string]bool, len(managed))
+		for _, d := range managed {
+			managedIDs[d.ID] = true
+		}
+
+		var undeclaredRules []Rule
+		for _, m := range memberships {
+			if managedIDs[m.ID] || m.SelfLink == "" {
+				continue
+			}
+			undeclaredRules = append(undeclaredRules, Rule{
+				Kind:     "Entitlement",
+				Resource: m.Name,
+				SelfLink: m.SelfLink,
+			})
+		}
+
+		var undeclared []Resource
+		if len(undeclaredRules) > 0 {
+			fmt.Fprintf(os.Stderr, "\nCollecting deep metadata for %d undeclared memberships…\n", len(undeclaredRules))
+			undeclared = surveyResources(browserCtx, undeclaredRules, opts, concurrency)
+			boolFalse := false
+			for i := range undeclared {
+				undeclared[i].Managed = &boolFalse
+			}
+		}
+
+		details = append(managed, undeclared...)
 
 		if err := writeCache(cachePath, details); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: could not write cache: %v\n", err)
@@ -237,10 +271,12 @@ func printGetOutput(data GetData, format, outputFile string) error {
 			Kind:       "MembershipList",
 			Data:       data,
 		}
-		out, err = json.MarshalIndent(&envelope, "", "  ")
-		if err == nil {
-			out = append(out, '\n')
-		}
+		var buf bytes.Buffer
+		enc := json.NewEncoder(&buf)
+		enc.SetIndent("", "  ")
+		enc.SetEscapeHTML(false)
+		err = enc.Encode(&envelope)
+		out = buf.Bytes()
 	case "name":
 		var sb strings.Builder
 		for _, m := range data.Items {
