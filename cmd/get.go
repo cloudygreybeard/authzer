@@ -133,7 +133,7 @@ func runGet(cmd *cobra.Command, args []string) error {
 			}
 		}
 
-		fmt.Fprintf(os.Stderr, "\nCollecting deep metadata for %d policy resources…\n", len(rules))
+		fmt.Fprintf(os.Stderr, "\nCollecting metadata for %d policy resources…\n", len(rules))
 		managed := surveyResources(browserCtx, rules, opts, concurrency)
 		boolTrue := true
 		for i := range managed {
@@ -159,7 +159,7 @@ func runGet(cmd *cobra.Command, args []string) error {
 
 		var undeclared []Resource
 		if len(undeclaredRules) > 0 {
-			fmt.Fprintf(os.Stderr, "\nCollecting deep metadata for %d undeclared memberships…\n", len(undeclaredRules))
+			fmt.Fprintf(os.Stderr, "\nCollecting metadata for %d undeclared memberships…\n", len(undeclaredRules))
 			undeclared = surveyResources(browserCtx, undeclaredRules, opts, concurrency)
 			boolFalse := false
 			for i := range undeclared {
@@ -180,6 +180,8 @@ func runGet(cmd *cobra.Command, args []string) error {
 			fmt.Fprintf(os.Stderr, "Loaded %d cached resource details from %s\n", len(details), cachePath)
 		}
 	}
+
+	printComplianceSummary(memberships, details)
 
 	data := GetData{
 		Updated:     time.Now().UTC().Format(time.RFC3339),
@@ -395,6 +397,65 @@ func readCache(path string) ([]Resource, error) {
 		return nil, err
 	}
 	return details, nil
+}
+
+func printComplianceSummary(memberships []Membership, details []Resource) {
+	group, groupErr := requireGroup()
+	if groupErr != nil {
+		return
+	}
+	rules, _, resolveErr := resolveRulesForGroup(group)
+	if resolveErr != nil {
+		return
+	}
+
+	nameByID := buildNameLookup(details)
+
+	membershipNames := make(map[string]bool, len(memberships))
+	for _, m := range memberships {
+		membershipNames[m.Name] = true
+	}
+
+	ruleNames := make(map[string]bool, len(rules))
+	for _, r := range rules {
+		name := nameByID[r.Resource]
+		if name == "" {
+			name = r.Resource
+		}
+		ruleNames[name] = true
+	}
+
+	var managed, undeclared int
+	for _, m := range memberships {
+		if ruleNames[m.Name] {
+			managed++
+		} else {
+			undeclared++
+		}
+	}
+
+	var missing []string
+	for _, r := range rules {
+		name := nameByID[r.Resource]
+		if name == "" {
+			name = r.Resource
+		}
+		if !membershipNames[name] {
+			missing = append(missing, name)
+		}
+	}
+
+	fmt.Fprintf(os.Stderr, "\nPolicy compliance (group: %s):\n", group)
+	fmt.Fprintf(os.Stderr, "  Managed:    %d\n", managed)
+	fmt.Fprintf(os.Stderr, "  Undeclared: %d\n", undeclared)
+	if len(missing) > 0 {
+		fmt.Fprintf(os.Stderr, "  Missing:    %d\n", len(missing))
+		for _, name := range missing {
+			fmt.Fprintf(os.Stderr, "    - %s\n", name)
+		}
+	} else {
+		fmt.Fprintf(os.Stderr, "  Missing:    0 (all policy resources present)\n")
+	}
 }
 
 func writeMembershipsCache(path string, memberships []Membership) error {
