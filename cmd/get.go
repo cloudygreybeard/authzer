@@ -80,7 +80,7 @@ func runGet(cmd *cobra.Command, args []string) error {
 
 	if mode == DryRunClient {
 		fmt.Fprintf(os.Stderr, "\nClient dry-run: no browser contact.\n")
-		return printCachedGet(outputFormat, outputFile)
+		return printCachedGet(outputFormat, outputFile, args)
 	}
 
 	if err := checkCDP(endpoint); err != nil {
@@ -181,14 +181,21 @@ func runGet(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	printComplianceSummary(memberships, details)
+	outputMemberships := memberships
+	outputDetails := details
+	if len(args) > 0 {
+		outputMemberships = filterMemberships(memberships, args)
+		outputDetails = filterDetailsByArgs(details, args)
+	} else {
+		printComplianceSummary(memberships, details)
+	}
 
 	data := GetData{
 		Updated:     time.Now().UTC().Format(time.RFC3339),
 		CDPEndpoint: endpoint,
-		TotalItems:  len(memberships),
-		Items:       memberships,
-		Details:     details,
+		TotalItems:  len(outputMemberships),
+		Items:       outputMemberships,
+		Details:     outputDetails,
 	}
 
 	return printGetOutput(data, outputFormat, outputFile)
@@ -335,7 +342,7 @@ func formatTable(items []Membership, wide bool) []byte {
 	return []byte(sb.String())
 }
 
-func printCachedGet(format, outputFile string) error {
+func printCachedGet(format, outputFile string, args []string) error {
 	cacheDir := cacheDirectory()
 	membershipsPath := filepath.Join(cacheDir, "memberships-cache.yaml")
 	detailsPath := filepath.Join(cacheDir, "details-cache.yaml")
@@ -353,6 +360,11 @@ func printCachedGet(format, outputFile string) error {
 	if len(memberships) == 0 {
 		fmt.Fprintf(os.Stderr, "No cached membership data. Run 'authzer get' with browser access first.\n")
 		return nil
+	}
+
+	if len(args) > 0 {
+		memberships = filterMemberships(memberships, args)
+		details = filterDetailsByArgs(details, args)
 	}
 
 	getdata := GetData{
@@ -458,6 +470,32 @@ func printComplianceSummary(memberships []Membership, details []Resource) {
 		fmt.Fprintf(os.Stderr, "  Missing:    0 (all policy resources present)\n")
 	}
 	fmt.Fprintln(os.Stderr)
+}
+
+func filterMemberships(memberships []Membership, args []string) []Membership {
+	var out []Membership
+	for _, m := range memberships {
+		for _, arg := range args {
+			if strings.EqualFold(m.Name, arg) || strings.EqualFold(m.ID, arg) {
+				out = append(out, m)
+				break
+			}
+		}
+	}
+	return out
+}
+
+func filterDetailsByArgs(details []Resource, args []string) []Resource {
+	var out []Resource
+	for _, d := range details {
+		for _, arg := range args {
+			if strings.EqualFold(d.Name, arg) || strings.EqualFold(d.ID, arg) {
+				out = append(out, d)
+				break
+			}
+		}
+	}
+	return out
 }
 
 func writeMembershipsCache(path string, memberships []Membership) error {
