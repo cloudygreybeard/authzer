@@ -37,6 +37,7 @@ New-Item -ItemType Directory -Path $TmpDir -Force | Out-Null
 try {
     $ZipPath = Join-Path $TmpDir $ZipName
     Invoke-WebRequest -Uri $Url -OutFile $ZipPath -UseBasicParsing
+    Unblock-File -Path $ZipPath
 
     Expand-Archive -Path $ZipPath -DestinationPath $TmpDir -Force
 
@@ -45,6 +46,7 @@ try {
     }
 
     $Src = Join-Path $TmpDir "$Binary.exe"
+    Unblock-File -Path $Src
     $Dst = Join-Path $InstallDir "$Binary.exe"
     Move-Item -Path $Src -Destination $Dst -Force
 
