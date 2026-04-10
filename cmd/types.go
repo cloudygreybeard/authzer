@@ -115,6 +115,48 @@ type Policy struct {
 }
 
 // ---------------------------------------------------------------------------
+// Context registry — multi-portal support
+// ---------------------------------------------------------------------------
+
+// ContextRegistry tracks named configuration contexts. Each context is
+// a self-contained directory with its own config, policy, scripts, and
+// cache. The registry file lives at the authzer config root.
+type ContextRegistry struct {
+	TypeMeta       `yaml:",inline"`
+	CurrentContext string         `yaml:"current-context"`
+	Contexts       []ContextEntry `yaml:"contexts"`
+}
+
+// ContextEntry maps a context name to its directory path, relative to
+// the authzer config root (or absolute).
+type ContextEntry struct {
+	Name string `yaml:"name"`
+	Path string `yaml:"path"`
+}
+
+// ---------------------------------------------------------------------------
+// SitePack — self-contained configuration bundle
+// ---------------------------------------------------------------------------
+
+// SitePack bundles portal-specific configuration into a single manifest.
+// Templates are rendered with values; data files are written verbatim.
+type SitePack struct {
+	TypeMeta  `yaml:",inline"`
+	Metadata  ObjectMeta        `yaml:"metadata"`
+	Values    []SitePackValue   `yaml:"values,omitempty"`
+	Templates map[string]string `yaml:"templates,omitempty"`
+	Data      map[string]string `yaml:"data,omitempty"`
+}
+
+// SitePackValue declares a user-configurable value with a prompt and
+// optional default, used for interactive import.
+type SitePackValue struct {
+	Key     string `yaml:"key"`
+	Prompt  string `yaml:"prompt"`
+	Default string `yaml:"default,omitempty"`
+}
+
+// ---------------------------------------------------------------------------
 // CLI output envelope
 // ---------------------------------------------------------------------------
 

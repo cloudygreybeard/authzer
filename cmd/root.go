@@ -55,7 +55,10 @@ const (
 	DryRunNone   = "none"   // full execution: submit forms, close tabs
 )
 
+var flagContext string
+
 func init() {
+	rootCmd.PersistentFlags().StringVar(&flagContext, "context", "", "override active context (env: AUTHZER_CONTEXT)")
 	rootCmd.PersistentFlags().String("cdp", "", "CDP HTTP endpoint")
 	rootCmd.PersistentFlags().String("group", "", "organisational role group (e.g. sre, senior-sre)")
 	rootCmd.PersistentFlags().String("justification", "", "override group's default justification text")
@@ -194,11 +197,44 @@ func xdgConfigHome() string {
 func initConfig(cmd *cobra.Command) error {
 	viper.SetConfigType("yaml")
 	viper.SetConfigName("config")
-	viper.AddConfigPath(filepath.Join(xdgConfigHome(), "authzer"))
-	viper.AddConfigPath(".")
 
 	viper.SetEnvPrefix("AUTHZER")
 	viper.AutomaticEnv()
+
+	// Resolve context directory before adding config search paths.
+	ctxName := flagContext
+	if ctxName == "" {
+		ctxName = os.Getenv("AUTHZER_CONTEXT")
+	}
+
+	if ctxName != "" {
+		reg, err := loadRegistry()
+		if err != nil {
+			return err
+		}
+		if reg == nil {
+			return fmt.Errorf("context %q requested but no contexts registered; run: authzer config import", ctxName)
+		}
+		dir, err := resolveContextDir(reg, ctxName)
+		if err != nil {
+			return err
+		}
+		activeContext = ctxName
+		viper.AddConfigPath(dir)
+	} else {
+		reg, _ := loadRegistry()
+		if reg != nil && reg.CurrentContext != "" && len(reg.Contexts) > 0 {
+			dir, err := resolveContextDir(reg, reg.CurrentContext)
+			if err != nil {
+				return err
+			}
+			activeContext = reg.CurrentContext
+			viper.AddConfigPath(dir)
+		} else {
+			viper.AddConfigPath(filepath.Join(xdgConfigHome(), "authzer"))
+		}
+	}
+	viper.AddConfigPath(".")
 
 	viper.SetDefault("concurrency", 3)
 	viper.SetDefault("settleDelay", "1s")

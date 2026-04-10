@@ -6,18 +6,67 @@ particular portal and which access entitlements to manage.
 
 ## Overview
 
-`authzer` configuration consists of two files:
+`authzer` configuration consists of two files per portal:
 
 - **`config.yaml`**— Portal interaction settings: CDP endpoint, selectors,
   JavaScript extraction scripts, dialog structure, and general preferences.
 - **`policy.yaml`**— RBAC policy defining resources, permissions, groups,
   and role bindings.
 
-Both files are placed in `~/.config/authzer/` on the target machine.
+These files live in a named **context directory** under
+`~/.config/authzer/`. Each context is a self-contained configuration
+for one portal.
+
+## Contexts
+
+`authzer` supports multiple portal configurations through named contexts.
+Each context is a directory containing its own `config.yaml`, `policy.yaml`,
+scripts, and cache.
+
+```
+~/.config/authzer/
+  contexts.yaml                # registry: current context + list
+  my-portal/                   # context directory
+    config.yaml
+    policy.yaml
+    values.yaml
+    scripts/
+      page-info.js
+      ...
+    memberships-cache.yaml
+    details-cache.yaml
+```
+
+The registry file (`contexts.yaml`) tracks available contexts and which
+one is active:
+
+```yaml
+apiVersion: authzer/v1alpha1
+kind: ContextList
+current-context: my-portal
+contexts:
+  - name: my-portal
+    path: my-portal
+```
+
+Context management:
+
+```bash
+authzer config list               # list contexts
+authzer config current            # print active context
+authzer config use NAME           # switch context
+authzer config view [CONTEXT]     # show config
+authzer --context NAME get        # one-off override
+```
+
+When no contexts are registered (no `contexts.yaml`), `authzer` falls
+back to flat mode, loading config directly from `~/.config/authzer/` or
+the current directory.
 
 ## Config file locations
 
-`authzer` searches for `config.yaml` in this order:
+With contexts, `authzer` loads `config.yaml` from the active context
+directory. Without contexts (flat mode), it searches in this order:
 
 1. CLI flags and `AUTHZER_` environment variables (highest precedence)
 2. `~/.config/authzer/config.yaml`
@@ -410,6 +459,93 @@ Verify the endpoint is accessible:
 
 ```bash
 curl http://127.0.0.1:9222/json/version
+```
+
+## Site-packs
+
+A site-pack (`kind: SitePack`) bundles all site-specific configuration into
+a single YAML manifest. This makes it straightforward to share portal
+configurations with colleagues — one file, no external tooling required.
+
+### Schema
+
+```yaml
+apiVersion: authzer/v1alpha1
+kind: SitePack
+metadata:
+  name: my-portal
+  annotations:
+    description: "Description of the portal configuration"
+    platform: windows
+values:
+  - key: group
+    prompt: "RBAC group name"
+    default: "sre"
+  - key: portal_host
+    prompt: "Portal base URL"
+    default: "https://portal.example.com"
+templates:
+  config.yaml: |
+    apiVersion: authzer/v1alpha1
+    kind: Config
+    group: {{ .group }}
+    portal:
+      memberships:
+        url: "{{ .portal_host }}/manage/entitlement"
+  policy.yaml: |
+    ---
+    apiVersion: authzer/v1alpha1
+    kind: Role
+    metadata:
+      name: team-access
+    rules:
+      - kind: Entitlement
+        resource: my-service
+        selfLink: {{ .portal_host }}/manage/resource/my-service
+        permission: ReadOnly
+data:
+  scripts/page-info.js: |
+    (() => { /* JavaScript extraction logic */ })()
+```
+
+- **`values`** — Declares user-configurable values with prompts and optional
+  defaults. Used for interactive import.
+- **`templates`** — Keys are output filenames. Values are Go `text/template`
+  content, rendered with the supplied values.
+- **`data`** — Keys are output filenames (may include paths like
+  `scripts/foo.js`). Values are written verbatim, not rendered.
+
+### Importing a site-pack
+
+```bash
+# Interactive — prompts for each value, creates a named context
+authzer config import -f site-pack.yaml
+
+# Non-interactive — supply all values from a file
+authzer config import -f site-pack.yaml --values values.yaml
+
+# Explicit context name (overrides metadata.name)
+authzer config import -f site-pack.yaml --context staging
+```
+
+The import command renders templates, copies data files, and writes
+everything to a context directory. The context is registered in
+`contexts.yaml` and set as current (on first import). The supplied
+values are saved as `values.yaml` for future re-imports.
+
+### File layout after import
+
+```
+~/.config/authzer/
+  contexts.yaml                # registry
+  my-portal/                   # context directory (from metadata.name)
+    config.yaml                # rendered from templates
+    policy.yaml                # rendered from templates
+    values.yaml                # saved values for re-import
+    scripts/
+      page-info.js             # from data
+      form-info.js             # from data
+      ...
 ```
 
 ## Validation

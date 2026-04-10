@@ -42,6 +42,11 @@ func init() {
 func runDoctor(cmd *cobra.Command, _ []string) error {
 	issues := 0
 
+	// Context
+	if activeContext != "" {
+		printCheck("Context", activeContext, "ok", "")
+	}
+
 	// Config file
 	configFile := viper.ConfigFileUsed()
 	if configFile != "" {
