@@ -612,6 +612,11 @@ func renewMembership(ctx context.Context, name string, opts renewOpts) Resource 
 		res.Error = fmt.Sprintf("config: %v", err)
 		return res
 	}
+	formReadyJS, err := resolveScript("portal.formReadyJs")
+	if err != nil {
+		res.Error = fmt.Sprintf("config: %v", err)
+		return res
+	}
 
 	leaveOpen := opts.DryRun == DryRunServer
 
@@ -639,15 +644,23 @@ func renewMembership(ctx context.Context, name string, opts renewOpts) Resource 
 	logf("selecting checkbox for %q", name)
 	js := fmt.Sprintf(selectJS, name)
 	var selected bool
-	if err := chromedp.Run(tabCtx, chromedp.Evaluate(js, &selected)); err != nil {
-		closeTab()
-		res.Error = fmt.Sprintf("select checkbox: %v", err)
-		return res
-	}
-	if !selected {
-		closeTab()
-		res.Error = fmt.Sprintf("checkbox for %q not found in memberships table", name)
-		return res
+	selectDeadline := time.Now().Add(opts.SettleDelay * 5)
+	for {
+		if err := chromedp.Run(tabCtx, chromedp.Evaluate(js, &selected)); err != nil {
+			closeTab()
+			res.Error = fmt.Sprintf("select checkbox: %v", err)
+			return res
+		}
+		if selected {
+			break
+		}
+		if time.Now().After(selectDeadline) {
+			closeTab()
+			res.Error = fmt.Sprintf("checkbox for %q not found in memberships table", name)
+			return res
+		}
+		logf("checkbox not yet found, retrying…")
+		time.Sleep(500 * time.Millisecond)
 	}
 	time.Sleep(300 * time.Millisecond)
 
@@ -673,6 +686,20 @@ func renewMembership(ctx context.Context, name string, opts renewOpts) Resource 
 		return res
 	}
 	time.Sleep(opts.SettleDelay)
+
+	logf("waiting for form elements to render")
+	formWaitDeadline := time.Now().Add(opts.SettleDelay * 10)
+	for time.Now().Before(formWaitDeadline) {
+		var ready bool
+		if err := chromedp.Run(tabCtx, chromedp.Evaluate(formReadyJS, &ready)); err != nil {
+			break
+		}
+		if ready {
+			logf("form elements detected")
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
 
 	logf("filling justification")
 	if err := fillJustification(tabCtx, opts.Justification); err != nil {
