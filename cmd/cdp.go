@@ -35,7 +35,7 @@ var wsRun = regexp.MustCompile(`[\s\x{00a0}\x{feff}\p{Z}]+`)
 var puaRe = regexp.MustCompile(`[\x{e000}-\x{f8ff}\x{f0000}-\x{ffffd}\x{100000}-\x{10fffd}]`)
 
 // cleanText strips Private Use Area glyphs (icon font artifacts from
-// Syncfusion/Blazor), collapses whitespace runs (including NBSP, BOM,
+// component frameworks), collapses whitespace runs (including NBSP, BOM,
 // and Unicode separators) into a single ASCII space, and trims.
 func cleanText(s string) string {
 	s = puaRe.ReplaceAllString(s, "")
