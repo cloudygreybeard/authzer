@@ -123,7 +123,9 @@ func runApply(cmd *cobra.Command, args []string) error {
 	fmt.Fprintf(os.Stderr, "Connecting to browser at %s…\n\n", wsBase)
 
 	browserCtx, browserCancel := connectBrowser(ctx, wsBase, verbose)
-	defer browserCancel()
+	if mode != DryRunServer {
+		defer browserCancel()
+	}
 
 	opts := surveyOpts{
 		SettleDelay: settleDelay,
@@ -311,24 +313,37 @@ func runApply(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	for _, it := range renewals {
-		select {
-		case <-ctx.Done():
-			fmt.Fprintf(os.Stderr, "\nAborted.\n")
-			goto done
-		default:
-		}
+	{
+		sem := make(chan struct{}, concurrency)
+		var wg sync.WaitGroup
 
-		rOpts := renewOpts{
-			SettleDelay:   settleDelay,
-			Timeout:       timeout,
-			Verbose:       verbose,
-			Justification: justification,
-			DryRun:        mode,
-			AcceptTerms:   acceptTerms,
+	renewLoop:
+		for _, item := range renewals {
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				fmt.Fprintf(os.Stderr, "\nAborted.\n")
+				break renewLoop
+			}
+
+			wg.Add(1)
+			go func(it actionItem) {
+				defer wg.Done()
+				defer func() { <-sem }()
+
+				rOpts := renewOpts{
+					SettleDelay:   settleDelay,
+					Timeout:       timeout,
+					Verbose:       verbose,
+					Justification: justification,
+					DryRun:        mode,
+					AcceptTerms:   acceptTerms,
+				}
+				res := renewMembership(browserCtx, it.membership.Name, rOpts)
+				reportResult(it, res)
+			}(item)
 		}
-		res := renewMembership(browserCtx, it.membership.Name, rOpts)
-		reportResult(it, res)
+		wg.Wait()
 	}
 
 	{
@@ -368,8 +383,6 @@ func runApply(cmd *cobra.Command, args []string) error {
 		}
 		wg.Wait()
 	}
-
-done:
 
 	fmt.Fprintf(os.Stderr, "\n────────────────────────────────\n")
 	switch mode {
