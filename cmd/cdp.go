@@ -407,6 +407,9 @@ func renewResource(ctx context.Context, url string, kind string, opts renewOpts)
 		}
 	}
 
+	leaveOpen := opts.DryRun == DryRunServer
+
+	parentCtx := ctx
 	if opts.Timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, opts.Timeout)
@@ -429,10 +432,12 @@ func renewResource(ctx context.Context, url string, kind string, opts renewOpts)
 		return res
 	}
 
-	leaveOpen := opts.DryRun == DryRunServer
-
 	logf("opening new tab")
-	tabCtx, tabCancel := newTab(ctx)
+	tabParent := ctx
+	if leaveOpen {
+		tabParent = parentCtx
+	}
+	tabCtx, tabCancel := newTab(tabParent)
 
 	closeTab := func() {
 		if !leaveOpen {
@@ -583,6 +588,12 @@ func renewMembership(ctx context.Context, name string, opts renewOpts) Resource 
 		}
 	}
 
+	leaveOpen := opts.DryRun == DryRunServer
+
+	// Keep a reference to the parent context before timeout wrapping.
+	// Tabs created in DryRunServer mode must outlive the per-operation
+	// timeout so they remain open for the user to inspect.
+	parentCtx := ctx
 	if opts.Timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, opts.Timeout)
@@ -618,10 +629,12 @@ func renewMembership(ctx context.Context, name string, opts renewOpts) Resource 
 		return res
 	}
 
-	leaveOpen := opts.DryRun == DryRunServer
-
 	logf("opening new tab")
-	tabCtx, tabCancel := newTab(ctx)
+	tabParent := ctx
+	if leaveOpen {
+		tabParent = parentCtx
+	}
+	tabCtx, tabCancel := newTab(tabParent)
 
 	closeTab := func() {
 		if !leaveOpen {
