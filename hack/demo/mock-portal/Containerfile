@@ -1,0 +1,22 @@
+# mock-portal: minimal entitlements portal for authzer demos.
+#
+# Serves HTML pages compatible with authzer's site-pack scripts so the
+# tool can exercise its full CDP workflow against a safe, reproducible
+# target.
+#
+# Build:
+#   podman build -t mock-portal -f hack/demo/mock-portal/Containerfile hack/demo/mock-portal/
+#
+# Run:
+#   podman run -p 8080:8080 mock-portal
+
+FROM golang:1.26-bookworm AS builder
+
+WORKDIR /src
+COPY . .
+RUN CGO_ENABLED=0 go build -ldflags "-s -w" -o /mock-portal .
+
+FROM scratch
+COPY --from=builder /mock-portal /mock-portal
+EXPOSE 8080
+ENTRYPOINT ["/mock-portal"]

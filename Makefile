@@ -11,7 +11,7 @@ LDFLAGS := -s -w \
 	-X github.com/cloudygreybeard/authzer/cmd.Commit=$(COMMIT) \
 	-X github.com/cloudygreybeard/authzer/cmd.Date=$(DATE)
 
-.PHONY: all build test test-integration test-all lint clean install snapshot help
+.PHONY: all build test test-integration test-all lint clean install snapshot demo-build demo-run demo help
 
 ## all: Build the binary (default target)
 all: build
@@ -19,6 +19,10 @@ all: build
 ## build: Build the binary
 build:
 	go build -ldflags "$(LDFLAGS)" -o $(BINARY) .
+
+## build-windows: Cross-compile for Windows amd64
+build-windows:
+	GOOS=windows GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o $(BINARY).exe .
 
 ## test: Run unit tests
 test:
@@ -53,6 +57,23 @@ snapshot:
 deps:
 	go mod download
 	go mod tidy
+
+CONTAINER_RT ?= podman
+
+## demo-build: Build the demo containers (mock-portal, chromium, authzer-demo)
+demo-build:
+	$(CONTAINER_RT) build -t mock-portal -f hack/demo/mock-portal/Containerfile hack/demo/mock-portal/
+	$(CONTAINER_RT) build -t authzer-chromium -f hack/demo/chromium/Containerfile hack/demo/chromium/
+	$(CONTAINER_RT) build -t authzer-demo -f hack/demo/Containerfile .
+
+## demo-run: Run the demo interactively (no recording)
+demo-run:
+	./hack/record-demo.sh --no-record
+
+## demo: Build containers and record the demo
+demo:
+	$(MAKE) demo-build
+	./hack/record-demo.sh
 
 ## help: Show this help
 help:

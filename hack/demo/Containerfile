@@ -1,0 +1,43 @@
+# authzer-demo: builds authzer and bundles it with demo config and scripts.
+# Connects to a separate Chromium container via CDP over the network.
+#
+# Build (from authzer/):
+#   podman build -t authzer-demo -f hack/demo/Containerfile .
+#
+# Run:
+#   podman run --rm --network authzer-demo-net authzer-demo
+
+# -- Stage 1: build authzer ------------------------------------------------
+FROM golang:1.26-bookworm AS builder
+
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -ldflags "-s -w \
+  -X github.com/cloudygreybeard/authzer/cmd.Version=demo \
+  -X github.com/cloudygreybeard/authzer/cmd.Commit=$(git rev-parse --short HEAD 2>/dev/null || echo demo) \
+  -X github.com/cloudygreybeard/authzer/cmd.Date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  -o /authzer .
+
+# -- Stage 2: slim runtime -------------------------------------------------
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    jq \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /authzer /usr/local/bin/authzer
+
+COPY hack/demo/config/ /root/.config/authzer/
+COPY hack/demo/demo-script.sh /demo/demo-script.sh
+COPY hack/demo/cdp-screenshot.sh /demo/cdp-screenshot.sh
+RUN chmod +x /demo/*.sh && mkdir -p /tmp/screenshots
+
+ENV TERM=xterm-256color
+ENV HOME=/root
+
+WORKDIR /demo
+CMD ["/demo/demo-script.sh"]

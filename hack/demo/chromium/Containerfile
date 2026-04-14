@@ -1,0 +1,12 @@
+# Headless Chrome shell for CDP automation.
+#
+# Uses chromedp/headless-shell which is purpose-built for Chrome DevTools
+# Protocol automation. It bundles socat to proxy 0.0.0.0:9222 to Chrome's
+# localhost-only DevTools port internally.
+#
+# Designed to run in a podman pod alongside mock-portal and authzer-demo.
+#
+# Build:
+#   podman build -t authzer-chromium -f hack/demo/chromium/Containerfile hack/demo/chromium/
+
+FROM chromedp/headless-shell:latest

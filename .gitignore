@@ -4,6 +4,13 @@
 
 # Build artifacts
 dist/
+hack/demo/mock-portal/mock-portal
+
+# Demo recording artifacts
+docs/authzer-demo.cast
+docs/authzer-demo.gif
+docs/authzer-demo.svg
+docs/screenshots/
 
 # Test artifacts
 *.test
