@@ -35,8 +35,8 @@ SCREENSHOT_DIR="${PROJECT_DIR}/docs/screenshots"
 TYPE_SPEED="${TYPE_SPEED:-0.020}"
 NO_RECORD="${1:-}"
 
-COLS=90
-ROWS=30
+COLS=100
+ROWS=35
 
 cleanup() {
   echo "Cleaning up..." >&2
@@ -80,6 +80,8 @@ if [ "${NO_RECORD}" = "--no-record" ]; then
   ${CONTAINER_RT} run --rm -it \
     --pod "${POD}" \
     -e "TYPE_SPEED=${TYPE_SPEED}" \
+    -e "COLUMNS=${COLS}" \
+    -e "LINES=${ROWS}" \
     "${DEMO_IMAGE}"
   exit 0
 fi
@@ -87,7 +89,7 @@ fi
 # Record with asciinema (asciicast v2 for svg-term compatibility).
 echo "Recording demo..." >&2
 asciinema rec "${CAST_FILE}" \
-  --command "${CONTAINER_RT} run --rm --pod ${POD} -e TYPE_SPEED=${TYPE_SPEED} ${DEMO_IMAGE}" \
+  --command "${CONTAINER_RT} run --rm --pod ${POD} -e TYPE_SPEED=${TYPE_SPEED} -e COLUMNS=${COLS} -e LINES=${ROWS} ${DEMO_IMAGE}" \
   --idle-time-limit 3 \
   --overwrite \
   --output-format asciicast-v2 \
