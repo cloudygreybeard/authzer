@@ -15,9 +15,12 @@
 package cmd
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
@@ -38,6 +41,7 @@ Available subcommands:
   current   Print the active context name
   use       Set the active context
   view      Show resolved configuration
+  policy    Show RBAC policy summary for the active group
   import    Import a SitePack manifest as a new context`,
 }
 
@@ -67,11 +71,25 @@ var configViewCmd = &cobra.Command{
 	RunE:  runConfigView,
 }
 
+var configPolicyCmd = &cobra.Command{
+	Use:   "policy",
+	Short: "Show RBAC policy summary for the active group",
+	Long: `Display a synopsis of the RBAC policy resolved for the active group.
+Shows the group identity, justification text, bound roles, and the
+flattened rule set.
+
+With -o yaml or -o json, emits the full policy manifests as structured
+output suitable for piping into yq or jq.`,
+	RunE: runConfigPolicy,
+}
+
 func init() {
+	configPolicyCmd.Flags().StringP("output", "o", "", `output format: "yaml", "json"`)
 	configCmd.AddCommand(configListCmd)
 	configCmd.AddCommand(configCurrentCmd)
 	configCmd.AddCommand(configUseCmd)
 	configCmd.AddCommand(configViewCmd)
+	configCmd.AddCommand(configPolicyCmd)
 	rootCmd.AddCommand(configCmd)
 }
 
@@ -188,4 +206,153 @@ func runConfigView(cmd *cobra.Command, args []string) error {
 	logHuman("# Config: %s\n", configFile)
 	fmt.Print(string(data))
 	return nil
+}
+
+func runConfigPolicy(cmd *cobra.Command, _ []string) error {
+	outputFormat, _ := cmd.Flags().GetString("output")
+
+	policy, err := loadPolicy()
+	if err != nil {
+		return err
+	}
+
+	if outputFormat != "" {
+		return printPolicyStructured(policy, outputFormat)
+	}
+
+	policyRef := viper.GetString("policy")
+	if policyRef == "" {
+		policyRef = "(none)"
+	}
+
+	group := viper.GetString("group")
+	if group == "" {
+		return printPolicyInventory(policy, policyRef)
+	}
+
+	rules, justification, err := policy.Resolve(group)
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprintf(os.Stdout, "Policy:  %s\n", policyRef)
+	fmt.Fprintf(os.Stdout, "Group:   %s\n", group)
+	fmt.Fprintf(os.Stdout, "Justify: %s\n", justification)
+
+	var roleNames []string
+	for _, rb := range policy.RoleBindings {
+		for _, subj := range rb.Subjects {
+			if subj.Kind == "Group" && subj.Name == group {
+				roleNames = append(roleNames, rb.RoleRef.Name)
+				break
+			}
+		}
+	}
+
+	fmt.Fprintf(os.Stdout, "\nRoles (via %d RoleBinding", len(roleNames))
+	if len(roleNames) != 1 {
+		fmt.Fprint(os.Stdout, "s")
+	}
+	fmt.Fprintln(os.Stdout, "):")
+	for _, rn := range roleNames {
+		role := policy.Roles[rn]
+		n := len(role.Rules)
+		unit := "rules"
+		if n == 1 {
+			unit = "rule"
+		}
+		fmt.Fprintf(os.Stdout, "  %-20s %d %s\n", rn, n, unit)
+	}
+
+	fmt.Fprintf(os.Stdout, "\nRules (%d total):\n", len(rules))
+	w := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
+	fmt.Fprintln(w, "  RESOURCE\tPERMISSION")
+	for _, r := range rules {
+		fmt.Fprintf(w, "  %s\t%s\n", r.Resource, r.Permission)
+	}
+	return w.Flush()
+}
+
+func printPolicyInventory(policy *Policy, policyRef string) error {
+	fmt.Fprintf(os.Stdout, "Policy: %s\n", policyRef)
+	fmt.Fprintf(os.Stdout, "Group:  (not set)\n")
+
+	fmt.Fprintf(os.Stdout, "\nGroups (%d):\n", len(policy.Groups))
+	groupNames := make([]string, 0, len(policy.Groups))
+	for name := range policy.Groups {
+		groupNames = append(groupNames, name)
+	}
+	sort.Strings(groupNames)
+	for _, name := range groupNames {
+		fmt.Fprintf(os.Stdout, "  %s\n", name)
+	}
+
+	fmt.Fprintf(os.Stdout, "\nRoles (%d):\n", len(policy.Roles))
+	rNames := make([]string, 0, len(policy.Roles))
+	for name := range policy.Roles {
+		rNames = append(rNames, name)
+	}
+	sort.Strings(rNames)
+	for _, name := range rNames {
+		n := len(policy.Roles[name].Rules)
+		unit := "rules"
+		if n == 1 {
+			unit = "rule"
+		}
+		fmt.Fprintf(os.Stdout, "  %-20s %d %s\n", name, n, unit)
+	}
+
+	fmt.Fprintf(os.Stdout, "\nRoleBindings (%d):\n", len(policy.RoleBindings))
+	for _, rb := range policy.RoleBindings {
+		fmt.Fprintf(os.Stdout, "  %s\n", rb.Metadata.Name)
+	}
+
+	logHuman("\nHint: set --group or group in config.yaml to see resolved rules.\n")
+	return nil
+}
+
+type policyData struct {
+	Groups       []Group       `yaml:"groups" json:"groups"`
+	Roles        []Role        `yaml:"roles" json:"roles"`
+	RoleBindings []RoleBinding `yaml:"roleBindings" json:"roleBindings"`
+}
+
+func printPolicyStructured(policy *Policy, format string) error {
+	data := policyData{}
+	for _, g := range policy.Groups {
+		data.Groups = append(data.Groups, *g)
+	}
+	for _, r := range policy.Roles {
+		data.Roles = append(data.Roles, *r)
+	}
+	for _, rb := range policy.RoleBindings {
+		data.RoleBindings = append(data.RoleBindings, *rb)
+	}
+
+	envelope := OutputEnvelope{
+		APIVersion: APIVersion,
+		Kind:       "Policy",
+		Data:       data,
+	}
+
+	var out []byte
+	var err error
+	switch format {
+	case "yaml":
+		out, err = yaml.Marshal(&envelope)
+	case "json":
+		var buf bytes.Buffer
+		enc := json.NewEncoder(&buf)
+		enc.SetIndent("", "  ")
+		enc.SetEscapeHTML(false)
+		err = enc.Encode(&envelope)
+		out = buf.Bytes()
+	default:
+		return fmt.Errorf("unsupported output format: %q (use yaml or json)", format)
+	}
+	if err != nil {
+		return fmt.Errorf("marshalling policy: %w", err)
+	}
+	_, err = os.Stdout.Write(out)
+	return err
 }
