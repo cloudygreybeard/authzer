@@ -177,7 +177,7 @@ func runDoctor(cmd *cobra.Command, _ []string) error {
 	if issues == 0 {
 		fmt.Fprintln(os.Stderr, "All checks passed.")
 	} else {
-		fmt.Fprintf(os.Stderr, "%d issue(s) found.\n", issues)
+		logHuman("%d issue(s) found.\n", issues)
 	}
 	return nil
 }
@@ -196,12 +196,12 @@ func printCheck(name, value, status, detail string) {
 	}
 
 	if value != "" {
-		fmt.Fprintf(os.Stderr, "  %-14s %-44s [%s]", name, value, icon)
+		logHuman("  %-14s %-44s [%s]", name, value, icon)
 	} else {
-		fmt.Fprintf(os.Stderr, "  %-14s %-44s [%s]", name, "", icon)
+		logHuman("  %-14s %-44s [%s]", name, "", icon)
 	}
 	if detail != "" {
-		fmt.Fprintf(os.Stderr, "  %s", detail)
+		logHuman("  %s", detail)
 	}
 	fmt.Fprintln(os.Stderr)
 }

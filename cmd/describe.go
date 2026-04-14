@@ -67,7 +67,7 @@ func runDescribe(cmd *cobra.Command, args []string) error {
 	}
 
 	if len(details) == 0 {
-		fmt.Fprintf(os.Stderr, "No matching resources found.\n")
+		logHuman("No matching resources found.\n")
 		return nil
 	}
 

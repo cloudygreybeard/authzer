@@ -63,7 +63,7 @@ func runLaunch(cmd *cobra.Command, _ []string) error {
 
 	endpoint := fmt.Sprintf("http://%s:%d", addr, port)
 	if err := checkCDP(endpoint); err == nil {
-		fmt.Fprintf(os.Stderr, "Browser already reachable at %s\n", endpoint)
+		logHuman("Browser already reachable at %s\n", endpoint)
 		return nil
 	}
 
@@ -78,10 +78,10 @@ func runLaunch(cmd *cobra.Command, _ []string) error {
 	}
 	args = append(args, extraArgs...)
 
-	fmt.Fprintf(os.Stderr, "Browser:  %s\n", browserPath)
-	fmt.Fprintf(os.Stderr, "Port:     %d\n", port)
-	fmt.Fprintf(os.Stderr, "Address:  %s\n", addr)
-	fmt.Fprintf(os.Stderr, "Profile:  %s\n", profileDir)
+	logHuman("Browser:  %s\n", browserPath)
+	logHuman("Port:     %d\n", port)
+	logHuman("Address:  %s\n", addr)
+	logHuman("Profile:  %s\n", profileDir)
 
 	proc := exec.Command(browserPath, args...)
 	proc.Stdout = nil
@@ -94,7 +94,7 @@ func runLaunch(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("detaching browser process: %w", err)
 	}
 
-	fmt.Fprintf(os.Stderr, "\nWaiting for CDP…\n")
+	logHuman("\nWaiting for CDP…\n")
 	client := &http.Client{Timeout: 2 * time.Second}
 	ready := false
 	for i := 0; i < 30; i++ {
@@ -109,11 +109,11 @@ func runLaunch(cmd *cobra.Command, _ []string) error {
 		time.Sleep(300 * time.Millisecond)
 	}
 	if !ready {
-		fmt.Fprintf(os.Stderr, "Warning: CDP not reachable after 9s at %s\n", endpoint)
-		fmt.Fprintf(os.Stderr, "The browser may still be starting. Try: authzer doctor\n")
+		logHuman("Warning: CDP not reachable after 9s at %s\n", endpoint)
+		logHuman("The browser may still be starting. Try: authzer doctor\n")
 		return nil
 	}
 
-	fmt.Fprintf(os.Stderr, "CDP ready at %s\n", endpoint)
+	logHuman("CDP ready at %s\n", endpoint)
 	return nil
 }

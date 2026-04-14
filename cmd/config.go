@@ -144,7 +144,7 @@ func runConfigUse(_ *cobra.Command, args []string) error {
 	if err := saveRegistry(reg); err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "Switched to context %q.\n", name)
+	logHuman("Switched to context %q.\n", name)
 	return nil
 }
 
@@ -169,7 +169,7 @@ func runConfigView(cmd *cobra.Command, args []string) error {
 			if err != nil {
 				return fmt.Errorf("reading config: %w", err)
 			}
-			fmt.Fprintf(os.Stderr, "# Context: %s\n# Config:  %s\n", ctxName, configPath)
+			logHuman("# Context: %s\n# Config:  %s\n", ctxName, configPath)
 			fmt.Print(string(data))
 			return nil
 		}
@@ -185,7 +185,7 @@ func runConfigView(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("marshaling config: %w", err)
 	}
-	fmt.Fprintf(os.Stderr, "# Config: %s\n", configFile)
+	logHuman("# Config: %s\n", configFile)
 	fmt.Print(string(data))
 	return nil
 }
