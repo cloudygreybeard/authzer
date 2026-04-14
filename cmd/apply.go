@@ -15,9 +15,13 @@
 package cmd
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -65,6 +69,11 @@ The dry-run mode controls execution depth:
 func init() {
 	applyCmd.Flags().Bool("accept-terms", false,
 		"automatically accept terms and conditions checkboxes")
+	applyCmd.Flags().String("renew-within", "",
+		`renewal threshold as a number of days, e.g. "30d" or "30" (default from config)`)
+	applyCmd.Flags().StringP("output", "o", "", `output format: "yaml", "json"`)
+	applyCmd.Flags().String("sort-by", "",
+		`sort order for displayed memberships: "expiry", "name" (default: policy order)`)
 	rootCmd.AddCommand(applyCmd)
 }
 
@@ -74,10 +83,19 @@ func runApply(cmd *cobra.Command, args []string) error {
 	endpoint := cdpURL()
 	settleDelay := viper.GetDuration("settleDelay")
 	timeout := viper.GetDuration("survey.timeout")
-	verbose := viper.GetBool("verbose")
 	concurrency := viper.GetInt("concurrency")
-	renewWithinDays := viper.GetInt("renewWithinDays")
 	acceptTerms, _ := cmd.Flags().GetBool("accept-terms")
+	outputFormat, _ := cmd.Flags().GetString("output")
+	sortBy, _ := cmd.Flags().GetString("sort-by")
+
+	renewWithinDays := viper.GetInt("renewWithinDays")
+	if rw, _ := cmd.Flags().GetString("renew-within"); rw != "" {
+		d, err := parseDays(rw)
+		if err != nil {
+			return fmt.Errorf("--renew-within: %w", err)
+		}
+		renewWithinDays = d
+	}
 
 	group, err := requireGroup()
 	if err != nil {
@@ -105,14 +123,23 @@ func runApply(cmd *cobra.Command, args []string) error {
 		justification = override
 	}
 
-	fmt.Fprintf(os.Stderr, "Group:         %s\n", group)
-	fmt.Fprintf(os.Stderr, "Justification: %s\n", justification)
-	fmt.Fprintf(os.Stderr, "Rules:         %d (from RBAC policy)\n", len(rules))
-	fmt.Fprintf(os.Stderr, "Renew within:  %d days\n", renewWithinDays)
-	fmt.Fprintf(os.Stderr, "Dry-run:       %s\n\n", mode)
+	logHuman("Group:         %s\n", group)
+	logHuman("Justification: %s\n", justification)
+	logHuman("Rules:         %d (from RBAC policy)\n", len(rules))
+	logHuman("Renew within:  %d days\n", renewWithinDays)
+	logHuman("Dry-run:       %s\n\n", mode)
+
+	auditLog.Info("apply.start", map[string]any{
+		"group":         group,
+		"justification": justification,
+		"rules":         len(rules),
+		"renewWithin":   renewWithinDays,
+		"dryRun":        mode,
+		"args":          args,
+	})
 
 	if mode == DryRunClient {
-		return runApplyClient(rules, justification, renewWithinDays)
+		return runApplyClient(rules, justification, renewWithinDays, group, outputFormat, sortBy, args)
 	}
 
 	if err := checkCDP(endpoint); err != nil {
@@ -120,9 +147,9 @@ func runApply(cmd *cobra.Command, args []string) error {
 	}
 
 	wsBase := strings.Replace(endpoint, "http://", "ws://", 1)
-	fmt.Fprintf(os.Stderr, "Connecting to browser at %s…\n\n", wsBase)
+	logHuman("Connecting to browser at %s…\n\n", wsBase)
 
-	browserCtx, browserCancel := connectBrowser(ctx, wsBase, verbose)
+	browserCtx, browserCancel := connectBrowser(ctx, wsBase)
 	if mode != DryRunServer {
 		defer browserCancel()
 	}
@@ -130,15 +157,14 @@ func runApply(cmd *cobra.Command, args []string) error {
 	opts := surveyOpts{
 		SettleDelay: settleDelay,
 		Timeout:     timeout,
-		Verbose:     verbose,
 	}
 
-	fmt.Fprintf(os.Stderr, "Fetching current memberships…\n")
+	logHuman("Fetching current memberships…\n")
 	memberships, err := listMemberships(browserCtx, opts)
 	if err != nil {
 		return fmt.Errorf("listing memberships: %w", err)
 	}
-	fmt.Fprintf(os.Stderr, "Found %d current memberships.\n\n", len(memberships))
+	logHuman("Found %d current memberships.\n\n", len(memberships))
 
 	cacheDir := cacheDirectory()
 	membershipsCachePath := filepath.Join(cacheDir, "memberships-cache.yaml")
@@ -155,37 +181,53 @@ func runApply(cmd *cobra.Command, args []string) error {
 	termsTextLookup := buildTermsTextLookup(detailsCache)
 
 	var actionable []actionItem
-	var current, skipped int
+	var renewItems, requestItems, currentItems, excludedItems []summaryItem
+	var skipped int
+
+	excludeList := viper.GetStringSlice("excludeResources")
+	excluded := make(map[string]bool, len(excludeList))
+	for _, e := range excludeList {
+		excluded[strings.ToLower(strings.TrimSpace(e))] = true
+	}
 
 	threshold := time.Now().AddDate(0, 0, renewWithinDays)
 	claimedNames := make(map[string]bool, len(rules))
-	n := 0
 
 	termsNote := func(name string) string {
 		if termsLookup[name] {
-			return " [has T&Cs]"
+			return "[has T&Cs]"
 		}
 		return ""
 	}
 
+	isExcluded := func(name string) bool {
+		return excluded[strings.ToLower(name)]
+	}
+
 	for _, rule := range rules {
-		n++
 		displayName := nameByID[rule.Resource]
 		m := membershipByName[displayName]
 
 		if m != nil {
 			claimedNames[m.Name] = true
-			expiresWithin := isExpiringWithin(m.ExpirationDate, threshold)
-			if expiresWithin || m.Expiring {
-				fmt.Fprintf(os.Stderr, "  [%d] %s — EXTEND (expires %s)%s\n",
-					n, m.Name, m.ExpirationDate, termsNote(m.Name))
+			if isExcluded(m.Name) {
+				excludedItems = append(excludedItems, summaryItem{
+					name: m.Name, expires: m.ExpirationDate,
+				})
+				continue
+			}
+			targeted := len(args) > 0
+			if targeted || isExpiringWithin(m.ExpirationDate, threshold) {
 				actionable = append(actionable, actionItem{
 					rule: rule, membership: m, action: "renew",
 				})
+				renewItems = append(renewItems, summaryItem{
+					name: m.Name, expires: m.ExpirationDate, note: termsNote(m.Name),
+				})
 			} else {
-				fmt.Fprintf(os.Stderr, "  [%d] %s — current (expires %s)\n",
-					n, m.Name, m.ExpirationDate)
-				current++
+				currentItems = append(currentItems, summaryItem{
+					name: m.Name, expires: m.ExpirationDate,
+				})
 			}
 		} else {
 			name := rule.Resource
@@ -193,15 +235,14 @@ func runApply(cmd *cobra.Command, args []string) error {
 				name = rule.SelfLink
 			}
 			if rule.SelfLink == "" {
-				fmt.Fprintf(os.Stderr, "  [%d] %s — SKIP (no selfLink for request)\n",
-					n, name)
 				skipped++
 				continue
 			}
-			fmt.Fprintf(os.Stderr, "  [%d] %s — REQUEST (not in current memberships)%s\n",
-				n, name, termsNote(name))
 			actionable = append(actionable, actionItem{
 				rule: rule, action: "request",
+			})
+			requestItems = append(requestItems, summaryItem{
+				name: name, note: termsNote(name),
 			})
 		}
 	}
@@ -213,29 +254,91 @@ func runApply(cmd *cobra.Command, args []string) error {
 			if claimedNames[m.Name] {
 				continue
 			}
-			n++
-			expiresWithin := isExpiringWithin(m.ExpirationDate, threshold)
-			if expiresWithin || m.Expiring {
-				fmt.Fprintf(os.Stderr, "  [%d] %s — EXTEND undeclared (expires %s)%s\n",
-					n, m.Name, m.ExpirationDate, termsNote(m.Name))
+			if isExcluded(m.Name) {
+				excludedItems = append(excludedItems, summaryItem{
+					name: m.Name, expires: m.ExpirationDate, action: "undeclared",
+				})
+				undeclared++
+				continue
+			}
+			if isExpiringWithin(m.ExpirationDate, threshold) {
 				actionable = append(actionable, actionItem{
 					membership: m, action: "renew",
 				})
+				renewItems = append(renewItems, summaryItem{
+					name: m.Name, expires: m.ExpirationDate,
+					note: termsNote(m.Name), action: "undeclared",
+				})
 			} else {
-				fmt.Fprintf(os.Stderr, "  [%d] %s — current, undeclared (expires %s)\n",
-					n, m.Name, m.ExpirationDate)
-				current++
+				currentItems = append(currentItems, summaryItem{
+					name: m.Name, expires: m.ExpirationDate, action: "undeclared",
+				})
 			}
 			undeclared++
 		}
 	}
 
-	fmt.Fprintf(os.Stderr, "\n────────────────────────────────\n")
-	fmt.Fprintf(os.Stderr, "Policy: %d  Portal: %d (undeclared: %d)\n",
-		len(rules), len(memberships), undeclared)
-	fmt.Fprintf(os.Stderr, "Renew: %d  Request: %d  Current: %d  Skipped: %d\n",
-		countAction(actionable, "renew"), countAction(actionable, "request"),
-		current, skipped)
+	maxName := 0
+	allItems := make([]summaryItem, 0, len(renewItems)+len(requestItems)+len(currentItems)+len(excludedItems))
+	allItems = append(allItems, renewItems...)
+	allItems = append(allItems, requestItems...)
+	allItems = append(allItems, currentItems...)
+	allItems = append(allItems, excludedItems...)
+	for _, it := range allItems {
+		if len(it.name) > maxName {
+			maxName = len(it.name)
+		}
+	}
+
+	printGroup := func(label string, items []summaryItem) {
+		if len(items) == 0 {
+			return
+		}
+		logHuman("%s:\n", label)
+		for _, it := range items {
+			annotations := ""
+			if it.action == "undeclared" {
+				annotations += " [undeclared]"
+			}
+			if it.note != "" {
+				annotations += " " + it.note
+			}
+			if it.expires != "" {
+				logHuman("  %-*s  (expires %s)%s\n",
+					maxName, it.name, it.expires, annotations)
+			} else {
+				logHuman("  %-*s  (not in current memberships)%s\n",
+					maxName, it.name, annotations)
+			}
+		}
+	}
+
+	if sortBy != "" {
+		sortSummaryItems(renewItems, sortBy)
+		sortSummaryItems(requestItems, sortBy)
+		sortSummaryItems(currentItems, sortBy)
+	}
+
+	printGroup("renew", renewItems)
+	printGroup("request", requestItems)
+	printGroup("current", currentItems)
+	printGroup("excluded", excludedItems)
+
+	logHuman("\n")
+	logHuman("Policy: %d  Portal: %d (undeclared: %d, excluded: %d)\n",
+		len(rules), len(memberships), undeclared, len(excludedItems))
+	logHuman("Renew: %d  Request: %d  Current: %d  Skipped: %d\n",
+		len(renewItems), len(requestItems), len(currentItems), skipped)
+
+	auditLog.Info("apply.plan", map[string]any{
+		"renew":   len(renewItems),
+		"request":  len(requestItems),
+		"current":  len(currentItems),
+		"excluded": len(excludedItems),
+		"skipped":  skipped,
+		"policy":   len(rules),
+		"portal":   len(memberships),
+	})
 
 	if !acceptTerms {
 		hasAnyTerms := false
@@ -250,12 +353,13 @@ func runApply(cmd *cobra.Command, args []string) error {
 			}
 		}
 		if hasAnyTerms {
-			fmt.Fprintf(os.Stderr, "\nNote: some resources have T&Cs. Pass --accept-terms to tick checkboxes automatically.\n")
+			logHuman("\nNote: some resources have T&Cs. Pass --accept-terms to tick checkboxes automatically.\n")
 		}
 	}
 
 	if len(actionable) == 0 {
-		fmt.Fprintf(os.Stderr, "\nAll memberships are current. Nothing to do.\n")
+		logHuman("\nAll memberships are current. Nothing to do.\n")
+		auditLog.Info("apply.done", map[string]any{"result": "nothing_to_do"})
 		return nil
 	}
 
@@ -273,6 +377,9 @@ func runApply(cmd *cobra.Command, args []string) error {
 	var succeeded, failed int
 	totalActions := len(actionable)
 
+	var resultsMu sync.Mutex
+	var results []Action
+
 	reportResult := func(it actionItem, res Resource) {
 		n := completed.Add(1)
 		label := it.rule.Resource
@@ -281,36 +388,67 @@ func runApply(cmd *cobra.Command, args []string) error {
 		}
 		if termsText := termsTextLookup[label]; termsText != "" && termsLookup[label] {
 			if acceptTerms {
-				fmt.Fprintf(os.Stderr, "  [%d/%d] %s/%s T&Cs: %s\n",
+				logHuman("  [%d/%d] %s/%s T&Cs: %s\n",
 					n, totalActions, it.action, label, termsText)
+				auditLog.Info("apply.terms", map[string]any{
+					"name":  label,
+					"terms": termsText,
+				})
 			}
 		}
+
+		act := Action{
+			Name:   label,
+			Action: it.action,
+		}
+		if it.membership != nil {
+			act.ID = it.membership.ID
+			act.CurrentRole = it.membership.Role
+		}
+		if it.rule.Resource != "" {
+			act.ID = it.rule.Resource
+			act.DesiredRole = it.rule.Permission
+			act.SelfLink = it.rule.SelfLink
+		}
+
 		if res.Error != "" {
+			act.Error = res.Error
+			act.Reason = "failed"
 			if mode == DryRunServer {
-				fmt.Fprintf(os.Stderr, "  [%d/%d] %s/%s … FAILED, tab open (%s)\n",
+				logHuman("  [%d/%d] %s/%s … FAILED, tab open (%s)\n",
 					n, totalActions, it.action, label, res.Error)
 			} else {
-				fmt.Fprintf(os.Stderr, "  [%d/%d] %s/%s … FAILED (%s)\n",
+				logHuman("  [%d/%d] %s/%s … FAILED (%s)\n",
 					n, totalActions, it.action, label, res.Error)
 			}
+			auditLog.Error("apply."+it.action+".fail", act)
 			failed++
 		} else {
 			switch mode {
 			case DryRunServer:
+				act.Reason = "prepared"
 				hasTerms := termsLookup[label]
 				if hasTerms && !acceptTerms {
-					fmt.Fprintf(os.Stderr, "  [%d/%d] %s/%s … prepared, terms not accepted (tab open)\n",
+					act.Reason = "prepared, terms not accepted"
+					logHuman("  [%d/%d] %s/%s … prepared, terms not accepted (tab open)\n",
 						n, totalActions, it.action, label)
 				} else {
-					fmt.Fprintf(os.Stderr, "  [%d/%d] %s/%s … prepared (tab open)\n",
+					logHuman("  [%d/%d] %s/%s … prepared (tab open)\n",
 						n, totalActions, it.action, label)
 				}
+				auditLog.Info("apply."+it.action+".ok", act)
 			case DryRunNone:
-				fmt.Fprintf(os.Stderr, "  [%d/%d] %s/%s … done\n",
+				act.Reason = "applied"
+				logHuman("  [%d/%d] %s/%s … done\n",
 					n, totalActions, it.action, label)
+				auditLog.Info("apply."+it.action+".ok", act)
 			}
 			succeeded++
 		}
+
+		resultsMu.Lock()
+		results = append(results, act)
+		resultsMu.Unlock()
 	}
 
 	{
@@ -322,7 +460,8 @@ func runApply(cmd *cobra.Command, args []string) error {
 			select {
 			case sem <- struct{}{}:
 			case <-ctx.Done():
-				fmt.Fprintf(os.Stderr, "\nAborted.\n")
+				logHuman("\nAborted.\n")
+				auditLog.Warn("apply.aborted", map[string]any{"phase": "renew"})
 				break renewLoop
 			}
 
@@ -334,7 +473,6 @@ func runApply(cmd *cobra.Command, args []string) error {
 				rOpts := renewOpts{
 					SettleDelay:   settleDelay,
 					Timeout:       timeout,
-					Verbose:       verbose,
 					Justification: justification,
 					DryRun:        mode,
 					AcceptTerms:   acceptTerms,
@@ -355,7 +493,8 @@ func runApply(cmd *cobra.Command, args []string) error {
 			select {
 			case sem <- struct{}{}:
 			case <-ctx.Done():
-				fmt.Fprintf(os.Stderr, "\nAborted.\n")
+				logHuman("\nAborted.\n")
+				auditLog.Warn("apply.aborted", map[string]any{"phase": "request"})
 				break requestLoop
 			}
 
@@ -367,7 +506,6 @@ func runApply(cmd *cobra.Command, args []string) error {
 				rOpts := renewOpts{
 					SettleDelay:   settleDelay,
 					Timeout:       timeout,
-					Verbose:       verbose,
 					Permission:    it.rule.Permission,
 					Justification: justification,
 					DryRun:        mode,
@@ -384,20 +522,75 @@ func runApply(cmd *cobra.Command, args []string) error {
 		wg.Wait()
 	}
 
-	fmt.Fprintf(os.Stderr, "\n────────────────────────────────\n")
+	logHuman("\n")
 	switch mode {
 	case DryRunServer:
-		fmt.Fprintf(os.Stderr, "Done. %d forms prepared, %d failed. Tabs left open for review.\n",
+		logHuman("Done. %d forms prepared, %d failed. Tabs left open for review.\n",
 			succeeded, failed)
 	case DryRunNone:
-		fmt.Fprintf(os.Stderr, "Done. %d applied, %d failed.\n",
+		logHuman("Done. %d applied, %d failed.\n",
 			succeeded, failed)
+	}
+
+	auditLog.Info("apply.done", map[string]any{
+		"succeeded": succeeded,
+		"failed":    failed,
+		"dryRun":    mode,
+	})
+
+	if outputFormat != "" {
+		data := ApplyData{
+			Updated:       time.Now().UTC().Format(time.RFC3339),
+			Group:         group,
+			Justification: justification,
+			DryRun:        mode,
+			TotalItems:    len(results),
+			Summary: ApplySummary{
+				Renew:  countAction(actionable, "renew"),
+				Request: countAction(actionable, "request"),
+				Current: len(currentItems),
+				Failed:  failed,
+			},
+			Items: results,
+		}
+		return printApplyOutput(data, outputFormat)
 	}
 
 	return nil
 }
 
-func runApplyClient(rules []Rule, justification string, renewWithinDays int) error {
+func printApplyOutput(data ApplyData, format string) error {
+	envelope := OutputEnvelope{
+		APIVersion: APIVersion,
+		Kind:       "ApplyResult",
+		Data:       data,
+	}
+
+	var out []byte
+	var err error
+
+	switch format {
+	case "yaml":
+		out, err = yaml.Marshal(&envelope)
+	case "json":
+		var buf bytes.Buffer
+		enc := json.NewEncoder(&buf)
+		enc.SetIndent("", "  ")
+		enc.SetEscapeHTML(false)
+		err = enc.Encode(&envelope)
+		out = buf.Bytes()
+	default:
+		return fmt.Errorf("unsupported output format: %q (use yaml or json)", format)
+	}
+	if err != nil {
+		return fmt.Errorf("marshalling output: %w", err)
+	}
+
+	_, err = os.Stdout.Write(out)
+	return err
+}
+
+func runApplyClient(rules []Rule, justification string, renewWithinDays int, group, outputFormat, sortBy string, args []string) error {
 	cacheDir := cacheDirectory()
 	membershipsCachePath := filepath.Join(cacheDir, "memberships-cache.yaml")
 
@@ -416,74 +609,209 @@ func runApplyClient(rules []Rule, justification string, renewWithinDays int) err
 	termsLookup := buildTermsLookup(detailsCache)
 
 	threshold := time.Now().AddDate(0, 0, renewWithinDays)
-	var extendCount, requestCount, currentCount, undeclared int
 	claimedNames := make(map[string]bool, len(rules))
-	n := 0
+
+	excludeList := viper.GetStringSlice("excludeResources")
+	excluded := make(map[string]bool, len(excludeList))
+	for _, e := range excludeList {
+		excluded[strings.ToLower(strings.TrimSpace(e))] = true
+	}
+	isExcluded := func(name string) bool {
+		return excluded[strings.ToLower(name)]
+	}
+
+	var renewItems, requestItems, currentItems, excludedItems []summaryItem
+	var items []Action
 
 	termsNote := func(name string) string {
 		if termsLookup[name] {
-			return " [has T&Cs]"
+			return "[has T&Cs]"
 		}
 		return ""
 	}
 
 	for _, rule := range rules {
-		n++
 		displayName := nameByID[rule.Resource]
 		m := membershipByName[displayName]
 		if m != nil {
 			claimedNames[m.Name] = true
-			expiresWithin := isExpiringWithin(m.ExpirationDate, threshold)
-			if expiresWithin || m.Expiring {
-				fmt.Fprintf(os.Stderr, "  [%d] %s — would EXTEND (expires %s)%s\n",
-					n, m.Name, m.ExpirationDate, termsNote(m.Name))
-				extendCount++
+			if isExcluded(m.Name) {
+				excludedItems = append(excludedItems, summaryItem{
+					name: m.Name, expires: m.ExpirationDate,
+				})
+				items = append(items, Action{
+					ID: rule.Resource, Name: m.Name, Action: "none",
+					Reason: "excluded", CurrentRole: m.Role, DesiredRole: rule.Permission,
+				})
+				continue
+			}
+			targeted := len(args) > 0
+			if targeted || isExpiringWithin(m.ExpirationDate, threshold) {
+				renewItems = append(renewItems, summaryItem{
+					name: m.Name, expires: m.ExpirationDate, note: termsNote(m.Name),
+				})
+				items = append(items, Action{
+					ID: rule.Resource, Name: m.Name, Action: "renew",
+					Reason: "expiring", CurrentRole: m.Role, DesiredRole: rule.Permission,
+					SelfLink: rule.SelfLink,
+				})
 			} else {
-				fmt.Fprintf(os.Stderr, "  [%d] %s — current (expires %s)\n",
-					n, m.Name, m.ExpirationDate)
-				currentCount++
+				currentItems = append(currentItems, summaryItem{
+					name: m.Name, expires: m.ExpirationDate,
+				})
+				items = append(items, Action{
+					ID: rule.Resource, Name: m.Name, Action: "none",
+					Reason: "current", CurrentRole: m.Role, DesiredRole: rule.Permission,
+				})
 			}
 		} else {
 			name := rule.Resource
 			if name == "" {
 				name = rule.SelfLink
 			}
-			fmt.Fprintf(os.Stderr, "  [%d] %s — would REQUEST (not in memberships)%s\n",
-				n, name, termsNote(name))
-			requestCount++
+			requestItems = append(requestItems, summaryItem{
+				name: name, note: termsNote(name),
+			})
+			items = append(items, Action{
+				ID: rule.Resource, Name: name, Action: "request",
+				Reason: "missing", DesiredRole: rule.Permission, SelfLink: rule.SelfLink,
+			})
 		}
 	}
 
+	var undeclared int
+	if len(args) > 0 {
+		goto skipUndeclared
+	}
 	for i := range memberships {
 		m := &memberships[i]
 		if claimedNames[m.Name] {
 			continue
 		}
-		n++
-		expiresWithin := isExpiringWithin(m.ExpirationDate, threshold)
-		if expiresWithin || m.Expiring {
-			fmt.Fprintf(os.Stderr, "  [%d] %s — would EXTEND undeclared (expires %s)%s\n",
-				n, m.Name, m.ExpirationDate, termsNote(m.Name))
-			extendCount++
+		if isExcluded(m.Name) {
+			excludedItems = append(excludedItems, summaryItem{
+				name: m.Name, expires: m.ExpirationDate, action: "undeclared",
+			})
+			items = append(items, Action{
+				ID: m.ID, Name: m.Name, Action: "none",
+				Reason: "excluded, undeclared", CurrentRole: m.Role,
+			})
+			undeclared++
+			continue
+		}
+		if isExpiringWithin(m.ExpirationDate, threshold) {
+			renewItems = append(renewItems, summaryItem{
+				name: m.Name, expires: m.ExpirationDate,
+				note: termsNote(m.Name), action: "undeclared",
+			})
+			items = append(items, Action{
+				ID: m.ID, Name: m.Name, Action: "renew",
+				Reason: "expiring, undeclared", CurrentRole: m.Role,
+			})
 		} else {
-			fmt.Fprintf(os.Stderr, "  [%d] %s — current, undeclared (expires %s)\n",
-				n, m.Name, m.ExpirationDate)
-			currentCount++
+			currentItems = append(currentItems, summaryItem{
+				name: m.Name, expires: m.ExpirationDate, action: "undeclared",
+			})
+			items = append(items, Action{
+				ID: m.ID, Name: m.Name, Action: "none",
+				Reason: "current, undeclared", CurrentRole: m.Role,
+			})
 		}
 		undeclared++
 	}
+skipUndeclared:
 
-	fmt.Fprintf(os.Stderr, "\n────────────────────────────────\n")
-	fmt.Fprintf(os.Stderr, "Policy: %d  Portal: %d (undeclared: %d)\n",
-		len(rules), len(memberships), undeclared)
-	fmt.Fprintf(os.Stderr, "Renew: %d  Request: %d  Current: %d\n",
-		extendCount, requestCount, currentCount)
-
-	if len(memberships) == 0 {
-		fmt.Fprintf(os.Stderr, "\nNote: no cached membership data. Run 'authzer get' first for accurate reconciliation.\n")
+	maxName := 0
+	all := make([]summaryItem, 0, len(renewItems)+len(requestItems)+len(currentItems))
+	all = append(all, renewItems...)
+	all = append(all, requestItems...)
+	all = append(all, currentItems...)
+	all = append(all, excludedItems...)
+	for _, it := range all {
+		if len(it.name) > maxName {
+			maxName = len(it.name)
+		}
 	}
 
-	fmt.Fprintf(os.Stderr, "\nClient dry-run complete.\n")
+	printGroup := func(label string, sitems []summaryItem) {
+		if len(sitems) == 0 {
+			return
+		}
+		logHuman("%s:\n", label)
+		for _, it := range sitems {
+			annotations := ""
+			if it.action == "undeclared" {
+				annotations += " [undeclared]"
+			}
+			if it.note != "" {
+				annotations += " " + it.note
+			}
+			if it.expires != "" {
+				logHuman("  %-*s  (expires %s)%s\n",
+					maxName, it.name, it.expires, annotations)
+			} else {
+				logHuman("  %-*s  (not in current memberships)%s\n",
+					maxName, it.name, annotations)
+			}
+		}
+	}
+
+	if sortBy != "" {
+		sortSummaryItems(renewItems, sortBy)
+		sortSummaryItems(requestItems, sortBy)
+		sortSummaryItems(currentItems, sortBy)
+	}
+
+	printGroup("renew", renewItems)
+	printGroup("request", requestItems)
+	printGroup("current", currentItems)
+	printGroup("excluded", excludedItems)
+
+	logHuman("\n")
+	logHuman("Policy: %d  Portal: %d (undeclared: %d, excluded: %d)\n",
+		len(rules), len(memberships), undeclared, len(excludedItems))
+	logHuman("Renew: %d  Request: %d  Current: %d\n",
+		len(renewItems), len(requestItems), len(currentItems))
+
+	auditLog.Info("apply.plan", map[string]any{
+		"renew":   len(renewItems),
+		"request":  len(requestItems),
+		"current":  len(currentItems),
+		"excluded": len(excludedItems),
+		"policy":   len(rules),
+		"portal":   len(memberships),
+		"dryRun":   DryRunClient,
+	})
+
+	if len(memberships) == 0 {
+		logHuman("\nNote: no cached membership data. Run 'authzer get' first for accurate reconciliation.\n")
+	}
+
+	logHuman("\nClient dry-run complete.\n")
+	auditLog.Info("apply.done", map[string]any{
+		"dryRun": DryRunClient,
+		"renew": len(renewItems),
+		"request": len(requestItems),
+		"current": len(currentItems),
+	})
+
+	if outputFormat != "" {
+		data := ApplyData{
+			Updated:       time.Now().UTC().Format(time.RFC3339),
+			Group:         group,
+			Justification: justification,
+			DryRun:        DryRunClient,
+			TotalItems:    len(items),
+			Summary: ApplySummary{
+				Renew:  len(renewItems),
+				Request: len(requestItems),
+				Current: len(currentItems),
+			},
+			Items: items,
+		}
+		return printApplyOutput(data, outputFormat)
+	}
+
 	return nil
 }
 
@@ -543,6 +871,59 @@ func isExpiringWithin(dateStr string, threshold time.Time) bool {
 		}
 	}
 	return false
+}
+
+type summaryItem struct {
+	name    string
+	expires string
+	note    string
+	action  string
+}
+
+func sortSummaryItems(items []summaryItem, sortBy string) {
+	switch sortBy {
+	case "expiry":
+		sort.SliceStable(items, func(i, j int) bool {
+			ti := parseExpiryTime(items[i].expires)
+			tj := parseExpiryTime(items[j].expires)
+			return ti.Before(tj)
+		})
+	case "name":
+		sort.SliceStable(items, func(i, j int) bool {
+			return strings.ToLower(items[i].name) < strings.ToLower(items[j].name)
+		})
+	}
+}
+
+func parseExpiryTime(s string) time.Time {
+	formats := []string{
+		"January 02, 2006 03:04 PM MST",
+		"January 2, 2006 03:04 PM MST",
+		"Jan 02, 2006 03:04 PM MST",
+		"Jan 2, 2006 03:04 PM MST",
+		"2006-01-02T15:04:05Z",
+		"2006-01-02",
+	}
+	for _, f := range formats {
+		if t, err := time.Parse(f, s); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
+}
+
+// parseDays accepts "30d" or "30" and returns the integer number of days.
+func parseDays(s string) (int, error) {
+	s = strings.TrimSpace(s)
+	s = strings.TrimSuffix(s, "d")
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return 0, fmt.Errorf("invalid day value %q: expected a number like 30 or 30d", s)
+	}
+	if n < 0 {
+		return 0, fmt.Errorf("day value must be non-negative, got %d", n)
+	}
+	return n, nil
 }
 
 func countAction(items []actionItem, action string) int {
