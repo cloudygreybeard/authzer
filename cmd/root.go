@@ -17,6 +17,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -66,7 +67,10 @@ func init() {
 	rootCmd.PersistentFlags().String("dry-run", "server",
 		`dry-run mode: "client" (local policy only, no browser), "server" (browser connected, `+
 			`prepare forms but do not submit), "none" (full execution)`)
-	rootCmd.PersistentFlags().BoolP("verbose", "v", false, "verbose/debug output")
+	rootCmd.PersistentFlags().BoolP("verbose", "v", false, "verbose/debug output (shorthand for --log-level=debug --log-file=stderr)")
+	rootCmd.PersistentFlags().String("log-file", "", `structured JSONL log destination (path, "-" for stdout, "stderr" for stderr)`)
+	rootCmd.PersistentFlags().String("log-level", "info", `minimum log level: debug, info, warn, error`)
+	rootCmd.PersistentFlags().BoolP("quiet", "q", false, "suppress human-readable stderr output")
 }
 
 // cdpURL returns the CDP HTTP endpoint, derived from the --cdp flag if
@@ -257,7 +261,7 @@ func initConfig(cmd *cobra.Command) error {
 			return fmt.Errorf("unsupported config apiVersion %q (expected %s)", v, APIVersion)
 		}
 		if viper.GetBool("verbose") {
-			fmt.Fprintf(os.Stderr, "Using config: %s\n", viper.ConfigFileUsed())
+			logHuman("Using config: %s\n", viper.ConfigFileUsed())
 		}
 	}
 
@@ -267,6 +271,58 @@ func initConfig(cmd *cobra.Command) error {
 	_ = viper.BindPFlag("justification", cmd.Flags().Lookup("justification"))
 	_ = viper.BindPFlag("verbose", cmd.Flags().Lookup("verbose"))
 	_ = viper.BindPFlag("group", cmd.Flags().Lookup("group"))
+	_ = viper.BindPFlag("log.file", cmd.Flags().Lookup("log-file"))
+	_ = viper.BindPFlag("log.level", cmd.Flags().Lookup("log-level"))
+	_ = viper.BindPFlag("quiet", cmd.Flags().Lookup("quiet"))
 
+	quiet = viper.GetBool("quiet")
+
+	if err := initAuditLog(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// logFile holds a reference to the opened log file so it can be closed
+// on process exit. Nil when logging to stdout/stderr/discard.
+var logFile *os.File
+
+func initAuditLog() error {
+	logLevel := ParseLevel(viper.GetString("log.level"))
+	logDest := viper.GetString("log.file")
+
+	// --verbose enables debug-level human output ([verbose] lines on
+	// stderr) for backward compatibility. It does not emit JSONL unless
+	// --log-file is also set.
+	verboseOnly := viper.GetBool("verbose") && logDest == ""
+	if viper.GetBool("verbose") {
+		logLevel = LevelDebug
+	}
+
+	if logDest == "" && !verboseOnly {
+		auditLog = NewLogger(nil, LevelInfo)
+		return nil
+	}
+	if verboseOnly {
+		auditLog = NewLogger(nil, LevelDebug)
+		return nil
+	}
+
+	var w io.Writer
+	switch logDest {
+	case "-":
+		w = os.Stdout
+	case "stderr":
+		w = os.Stderr
+	default:
+		f, err := os.OpenFile(logDest, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err != nil {
+			return fmt.Errorf("opening log file %s: %w", logDest, err)
+		}
+		logFile = f
+		w = f
+	}
+	auditLog = NewLogger(w, logLevel)
 	return nil
 }
