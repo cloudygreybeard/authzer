@@ -200,13 +200,12 @@ func TestSurveyResource_MockPortal(t *testing.T) {
 	setupViperForIntegration(t)
 
 	ctx := context.Background()
-	browserCtx, cancel := connectBrowser(ctx, cdpWSURL, true)
+	browserCtx, cancel := connectBrowser(ctx, cdpWSURL)
 	defer cancel()
 
 	opts := surveyOpts{
 		SettleDelay: 500 * time.Millisecond,
 		Timeout:     30 * time.Second,
-		Verbose:     true,
 	}
 
 	url := mockServerURL + "/index.html"
@@ -268,7 +267,7 @@ func TestFindButton_MockPortal(t *testing.T) {
 	setupViperForIntegration(t)
 
 	ctx := context.Background()
-	browserCtx, cancel := connectBrowser(ctx, cdpWSURL, false)
+	browserCtx, cancel := connectBrowser(ctx, cdpWSURL)
 	defer cancel()
 
 	tabCtx, tabCancel := newTab(browserCtx)
@@ -297,7 +296,7 @@ func TestDispatchClick_MockPortal(t *testing.T) {
 	setupViperForIntegration(t)
 
 	ctx := context.Background()
-	browserCtx, cancel := connectBrowser(ctx, cdpWSURL, false)
+	browserCtx, cancel := connectBrowser(ctx, cdpWSURL)
 	defer cancel()
 
 	tabCtx, tabCancel := newTab(browserCtx)
@@ -358,14 +357,13 @@ func TestRenewResource_ServerDryRun(t *testing.T) {
 	setupViperForIntegration(t)
 
 	ctx := context.Background()
-	browserCtx, cancel := connectBrowser(ctx, cdpWSURL, true)
+	browserCtx, cancel := connectBrowser(ctx, cdpWSURL)
 	defer cancel()
 
 	url := mockServerURL + "/index.html"
 	opts := renewOpts{
 		SettleDelay:   500 * time.Millisecond,
 		Timeout:       30 * time.Second,
-		Verbose:       true,
 		Permission:    "ReadWrite",
 		Justification: "Integration test justification",
 		DryRun:        DryRunServer,
@@ -388,14 +386,13 @@ func TestRenewResource_FullExecution(t *testing.T) {
 	setupViperForIntegration(t)
 
 	ctx := context.Background()
-	browserCtx, cancel := connectBrowser(ctx, cdpWSURL, true)
+	browserCtx, cancel := connectBrowser(ctx, cdpWSURL)
 	defer cancel()
 
 	url := mockServerURL + "/index.html"
 	opts := renewOpts{
 		SettleDelay:   500 * time.Millisecond,
 		Timeout:       30 * time.Second,
-		Verbose:       true,
 		Permission:    "Admin",
 		Justification: "Full execution test",
 		DryRun:        DryRunNone,
@@ -415,7 +412,7 @@ func TestSelectPermission_MockPortal(t *testing.T) {
 	setupViperForIntegration(t)
 
 	ctx := context.Background()
-	browserCtx, cancel := connectBrowser(ctx, cdpWSURL, false)
+	browserCtx, cancel := connectBrowser(ctx, cdpWSURL)
 	defer cancel()
 
 	tabCtx, tabCancel := newTab(browserCtx)
@@ -475,7 +472,7 @@ func TestFillJustification_MockPortal(t *testing.T) {
 	setupViperForIntegration(t)
 
 	ctx := context.Background()
-	browserCtx, cancel := connectBrowser(ctx, cdpWSURL, false)
+	browserCtx, cancel := connectBrowser(ctx, cdpWSURL)
 	defer cancel()
 
 	tabCtx, tabCancel := newTab(browserCtx)
@@ -528,7 +525,7 @@ func TestCheckTerms_MockPortal(t *testing.T) {
 	setupViperForIntegration(t)
 
 	ctx := context.Background()
-	browserCtx, cancel := connectBrowser(ctx, cdpWSURL, false)
+	browserCtx, cancel := connectBrowser(ctx, cdpWSURL)
 	defer cancel()
 
 	tabCtx, tabCancel := newTab(browserCtx)

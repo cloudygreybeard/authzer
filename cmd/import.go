@@ -88,11 +88,11 @@ func runImport(cmd *cobra.Command, _ []string) error {
 		ctxName = strings.TrimSuffix(filepath.Base(manifestPath), filepath.Ext(manifestPath))
 	}
 
-	fmt.Fprintf(os.Stderr, "Importing SitePack: %s (context: %s)\n", sp.Metadata.Name, ctxName)
+	logHuman("Importing SitePack: %s (context: %s)\n", sp.Metadata.Name, ctxName)
 	if desc := sp.Metadata.Annotations["description"]; desc != "" {
-		fmt.Fprintf(os.Stderr, "  %s\n", desc)
+		logHuman("  %s\n", desc)
 	}
-	fmt.Fprintln(os.Stderr)
+	logHuman("\n")
 
 	vals, err := resolveValues(sp.Values, valuesPath)
 	if err != nil {
@@ -116,7 +116,7 @@ func runImport(cmd *cobra.Command, _ []string) error {
 		if err := writeFileWithDirs(outPath, []byte(out)); err != nil {
 			return fmt.Errorf("writing %s: %w", filename, err)
 		}
-		fmt.Fprintf(os.Stderr, "  rendered  %s\n", filename)
+		logHuman("  rendered  %s\n", filename)
 		rendered++
 	}
 
@@ -131,7 +131,7 @@ func runImport(cmd *cobra.Command, _ []string) error {
 		written++
 	}
 	if written > 0 {
-		fmt.Fprintf(os.Stderr, "  copied    %d data files\n", written)
+		logHuman("  copied    %d data files\n", written)
 	}
 
 	valsDst := filepath.Join(destDir, "values.yaml")
@@ -142,7 +142,7 @@ func runImport(cmd *cobra.Command, _ []string) error {
 	if err := os.WriteFile(valsDst, valsData, 0644); err != nil {
 		return fmt.Errorf("writing values: %w", err)
 	}
-	fmt.Fprintf(os.Stderr, "  saved     values.yaml\n")
+	logHuman("  saved     values.yaml\n")
 
 	isFirst := false
 	if reg, _ := loadRegistry(); reg == nil || len(reg.Contexts) == 0 {
@@ -151,17 +151,17 @@ func runImport(cmd *cobra.Command, _ []string) error {
 	if err := registerContext(ctxName, ctxName, isFirst); err != nil {
 		return fmt.Errorf("registering context: %w", err)
 	}
-	fmt.Fprintf(os.Stderr, "  registered context %q\n", ctxName)
+	logHuman("  registered context %q\n", ctxName)
 
-	fmt.Fprintf(os.Stderr, "\nImported to %s\n", destDir)
-	fmt.Fprintf(os.Stderr, "  %d templates rendered, %d data files copied\n", rendered, written)
+	logHuman("\nImported to %s\n", destDir)
+	logHuman("  %d templates rendered, %d data files copied\n", rendered, written)
 	if isFirst {
-		fmt.Fprintf(os.Stderr, "  current context set to %q\n", ctxName)
+		logHuman("  current context set to %q\n", ctxName)
 	}
-	fmt.Fprintf(os.Stderr, "\nNext steps:\n")
-	fmt.Fprintf(os.Stderr, "  authzer doctor    # validate setup\n")
-	fmt.Fprintf(os.Stderr, "  authzer launch    # start browser with CDP\n")
-	fmt.Fprintf(os.Stderr, "  authzer get       # check memberships\n")
+	logHuman("\nNext steps:\n")
+	logHuman("  authzer doctor    # validate setup\n")
+	logHuman("  authzer launch    # start browser with CDP\n")
+	logHuman("  authzer get       # check memberships\n")
 	return nil
 }
 

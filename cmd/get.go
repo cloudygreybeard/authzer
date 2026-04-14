@@ -73,13 +73,13 @@ func runGet(cmd *cobra.Command, args []string) error {
 	endpoint := cdpURL()
 	settleDelay := viper.GetDuration("settleDelay")
 	timeout := viper.GetDuration("survey.timeout")
-	verbose := viper.GetBool("verbose")
 	concurrency := viper.GetInt("concurrency")
 
-	fmt.Fprintf(os.Stderr, "Dry-run:  %s\n", mode)
+	logHuman("Dry-run:  %s\n", mode)
+	auditLog.Info("get.start", map[string]any{"dryRun": mode, "args": args})
 
 	if mode == DryRunClient {
-		fmt.Fprintf(os.Stderr, "\nClient dry-run: no browser contact.\n")
+		logHuman("\nClient dry-run: no browser contact.\n")
 		return printCachedGet(outputFormat, outputFile, args)
 	}
 
@@ -88,28 +88,27 @@ func runGet(cmd *cobra.Command, args []string) error {
 	}
 
 	wsBase := strings.Replace(endpoint, "http://", "ws://", 1)
-	fmt.Fprintf(os.Stderr, "CDP:      %s\n", endpoint)
-	fmt.Fprintf(os.Stderr, "\nConnecting to browser at %s…\n\n", wsBase)
+	logHuman("CDP:      %s\n", endpoint)
+	logHuman("\nConnecting to browser at %s…\n\n", wsBase)
 
-	browserCtx, browserCancel := connectBrowser(ctx, wsBase, verbose)
+	browserCtx, browserCancel := connectBrowser(ctx, wsBase)
 	defer browserCancel()
 
 	opts := surveyOpts{
 		SettleDelay: settleDelay,
 		Timeout:     timeout,
-		Verbose:     verbose,
 	}
 
 	memberships, err := listMemberships(browserCtx, opts)
 	if err != nil {
 		return fmt.Errorf("listing memberships: %w", err)
 	}
-	fmt.Fprintf(os.Stderr, "Found %d memberships.\n", len(memberships))
+	logHuman("Found %d memberships.\n", len(memberships))
 
 	cacheDir := cacheDirectory()
 	membershipsCachePath := filepath.Join(cacheDir, "memberships-cache.yaml")
 	if err := writeMembershipsCache(membershipsCachePath, memberships); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: could not write memberships cache: %v\n", err)
+		logHuman("Warning: could not write memberships cache: %v\n", err)
 	}
 
 	cachePath := filepath.Join(cacheDir, "details-cache.yaml")
@@ -133,7 +132,7 @@ func runGet(cmd *cobra.Command, args []string) error {
 			}
 		}
 
-		fmt.Fprintf(os.Stderr, "\nCollecting metadata for %d policy resources…\n", len(rules))
+		logHuman("\nCollecting metadata for %d policy resources…\n", len(rules))
 		managed := surveyResources(browserCtx, rules, opts, concurrency)
 		boolTrue := true
 		for i := range managed {
@@ -159,7 +158,7 @@ func runGet(cmd *cobra.Command, args []string) error {
 
 		var undeclared []Resource
 		if len(undeclaredRules) > 0 {
-			fmt.Fprintf(os.Stderr, "\nCollecting metadata for %d undeclared memberships…\n", len(undeclaredRules))
+			logHuman("\nCollecting metadata for %d undeclared memberships…\n", len(undeclaredRules))
 			undeclared = surveyResources(browserCtx, undeclaredRules, opts, concurrency)
 			boolFalse := false
 			for i := range undeclared {
@@ -170,14 +169,14 @@ func runGet(cmd *cobra.Command, args []string) error {
 		details = append(managed, undeclared...)
 
 		if err := writeCache(cachePath, details); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: could not write cache: %v\n", err)
+			logHuman("Warning: could not write cache: %v\n", err)
 		} else {
-			fmt.Fprintf(os.Stderr, "Cached %d resource details to %s\n", len(details), cachePath)
+			logHuman("Cached %d resource details to %s\n", len(details), cachePath)
 		}
 	} else {
 		details, _ = readCache(cachePath)
-		if verbose && len(details) > 0 {
-			fmt.Fprintf(os.Stderr, "Loaded %d cached resource details from %s\n", len(details), cachePath)
+		if auditLog.Enabled(LevelDebug) && len(details) > 0 {
+			logHuman("Loaded %d cached resource details from %s\n", len(details), cachePath)
 		}
 	}
 
@@ -244,9 +243,9 @@ surveyLoop:
 			mu.Lock()
 			results[idx] = res
 			if res.Error != "" {
-				fmt.Fprintf(os.Stderr, "  [%d/%d] %s … FAILED (%s)\n", n, total, r.SelfLink, res.Error)
+				logHuman("  [%d/%d] %s … FAILED (%s)\n", n, total, r.SelfLink, res.Error)
 			} else {
-				fmt.Fprintf(os.Stderr, "  [%d/%d] %s … ok\n", n, total, res.Name)
+				logHuman("  [%d/%d] %s … ok\n", n, total, res.Name)
 			}
 			mu.Unlock()
 		}(i, rule)
@@ -307,7 +306,7 @@ func printGetOutput(data GetData, format, outputFile string) error {
 		if err := os.WriteFile(outputFile, out, 0644); err != nil {
 			return fmt.Errorf("write %s: %w", outputFile, err)
 		}
-		fmt.Fprintf(os.Stderr, "Output written to %s\n", outputFile)
+		logHuman("Output written to %s\n", outputFile)
 		return nil
 	}
 	_, err = os.Stdout.Write(out)
@@ -358,7 +357,7 @@ func printCachedGet(format, outputFile string, args []string) error {
 	}
 
 	if len(memberships) == 0 {
-		fmt.Fprintf(os.Stderr, "No cached membership data. Run 'authzer get' with browser access first.\n")
+		logHuman("No cached membership data. Run 'authzer get' with browser access first.\n")
 		return nil
 	}
 
@@ -458,18 +457,18 @@ func printComplianceSummary(memberships []Membership, details []Resource) {
 		}
 	}
 
-	fmt.Fprintf(os.Stderr, "\nPolicy compliance (group: %s):\n", group)
-	fmt.Fprintf(os.Stderr, "  Managed:    %d\n", managed)
-	fmt.Fprintf(os.Stderr, "  Undeclared: %d\n", undeclared)
+	logHuman("\nPolicy compliance (group: %s):\n", group)
+	logHuman("  Managed:    %d\n", managed)
+	logHuman("  Undeclared: %d\n", undeclared)
 	if len(missing) > 0 {
-		fmt.Fprintf(os.Stderr, "  Missing:    %d\n", len(missing))
+		logHuman("  Missing:    %d\n", len(missing))
 		for _, name := range missing {
-			fmt.Fprintf(os.Stderr, "    - %s\n", name)
+			logHuman("    - %s\n", name)
 		}
 	} else {
-		fmt.Fprintf(os.Stderr, "  Missing:    0 (all policy resources present)\n")
+		logHuman("  Missing:    0 (all policy resources present)\n")
 	}
-	fmt.Fprintln(os.Stderr)
+	logHuman("\n")
 }
 
 func filterMemberships(memberships []Membership, args []string) []Membership {

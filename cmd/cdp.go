@@ -90,7 +90,6 @@ type formInfoRaw struct {
 type surveyOpts struct {
 	SettleDelay time.Duration
 	Timeout     time.Duration
-	Verbose     bool
 }
 
 // resolveScript loads a config value that may be either inline content or a
@@ -234,11 +233,11 @@ func findBrowserPath() string {
 
 // connectBrowser returns a chromedp browser context connected to an existing
 // browser at the given CDP WebSocket URL (e.g. ws://127.0.0.1:9222).
-func connectBrowser(ctx context.Context, wsURL string, verbose bool) (context.Context, context.CancelFunc) {
+func connectBrowser(ctx context.Context, wsURL string) (context.Context, context.CancelFunc) {
 	allocCtx, allocCancel := chromedp.NewRemoteAllocator(ctx, wsURL)
 
 	var opts []chromedp.ContextOption
-	if verbose {
+	if auditLog.Enabled(LevelDebug) {
 		opts = append(opts, chromedp.WithDebugf(log.New(os.Stderr, "cdp: ", log.Lmicroseconds).Printf))
 	}
 
@@ -326,7 +325,6 @@ func findCloseButton(ctx context.Context) (Coords, error) {
 type renewOpts struct {
 	SettleDelay   time.Duration
 	Timeout       time.Duration
-	Verbose       bool
 	Justification string
 	Permission    string
 	DryRun        string
@@ -375,7 +373,7 @@ func fillJustification(ctx context.Context, text string) error {
 		return fmt.Errorf("fillJustification: %w", err)
 	}
 	if !ok {
-		return fmt.Errorf("justification textarea not found or text not inserted")
+		return fmt.Errorf("justification field not found or not filled")
 	}
 	return nil
 }
@@ -402,9 +400,12 @@ func checkTerms(ctx context.Context) error {
 func renewResource(ctx context.Context, url string, kind string, opts renewOpts) Resource {
 	res := Resource{Kind: kind, SelfLink: url}
 	logf := func(format string, args ...any) {
-		if opts.Verbose {
-			fmt.Fprintf(os.Stderr, "  [verbose] "+format+"\n", args...)
+		if !auditLog.Enabled(LevelDebug) {
+			return
 		}
+		msg := fmt.Sprintf(format, args...)
+		logHuman("  [verbose] %s\n", msg)
+		auditLog.Debug("cdp.renew", map[string]any{"resource": url, "msg": msg})
 	}
 
 	leaveOpen := opts.DryRun == DryRunServer
@@ -583,9 +584,12 @@ func renewResource(ctx context.Context, url string, kind string, opts renewOpts)
 func renewMembership(ctx context.Context, name string, opts renewOpts) Resource {
 	res := Resource{Name: name}
 	logf := func(format string, args ...any) {
-		if opts.Verbose {
-			fmt.Fprintf(os.Stderr, "  [verbose] "+format+"\n", args...)
+		if !auditLog.Enabled(LevelDebug) {
+			return
 		}
+		msg := fmt.Sprintf(format, args...)
+		logHuman("  [verbose] %s\n", msg)
+		auditLog.Debug("cdp.renew", map[string]any{"resource": name, "msg": msg})
 	}
 
 	leaveOpen := opts.DryRun == DryRunServer
@@ -758,9 +762,12 @@ func renewMembership(ctx context.Context, name string, opts renewOpts) Resource 
 // returns structured membership data.
 func listMemberships(ctx context.Context, opts surveyOpts) ([]Membership, error) {
 	logf := func(format string, args ...any) {
-		if opts.Verbose {
-			fmt.Fprintf(os.Stderr, "  [verbose] "+format+"\n", args...)
+		if !auditLog.Enabled(LevelDebug) {
+			return
 		}
+		msg := fmt.Sprintf(format, args...)
+		logHuman("  [verbose] %s\n", msg)
+		auditLog.Debug("cdp.memberships", map[string]any{"msg": msg})
 	}
 
 	membershipsURL := viper.GetString("portal.memberships.url")
@@ -826,9 +833,12 @@ func listMemberships(ctx context.Context, opts surveyOpts) ([]Membership, error)
 func surveyResource(ctx context.Context, url string, kind string, opts surveyOpts) Resource {
 	ent := Resource{Kind: kind, SelfLink: url}
 	logf := func(format string, args ...any) {
-		if opts.Verbose {
-			fmt.Fprintf(os.Stderr, "  [verbose] "+format+"\n", args...)
+		if !auditLog.Enabled(LevelDebug) {
+			return
 		}
+		msg := fmt.Sprintf(format, args...)
+		logHuman("  [verbose] %s\n", msg)
+		auditLog.Debug("cdp.survey", map[string]any{"resource": url, "msg": msg})
 	}
 
 	if opts.Timeout > 0 {
