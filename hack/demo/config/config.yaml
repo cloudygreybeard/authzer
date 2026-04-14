@@ -1,0 +1,63 @@
+# authzer config for demo — points at mock-portal container.
+
+apiVersion: authzer/v1alpha1
+kind: Config
+
+group: demo-sre
+cdp: http://127.0.0.1:9222
+concurrency: 3
+settleDelay: 1s
+verbose: false
+policy: policy.yaml
+
+dry-run: server
+
+renewWithinDays: 30
+
+survey:
+  timeout: 60s
+
+portal:
+  name: "Demo Portal"
+
+  page:
+    readySelector: "h1"
+    infoJs: "@scripts/page-info.js"
+
+  dialog:
+    triggerText: "Request Membership"
+    triggerSelector: 'button, a, [role="button"], [role="link"]'
+    readySelector: '[role="dialog"]'
+    optionText: "This Account"
+    closeTexts: ["Cancel", "Close"]
+    closeAriaLabels: ["Close"]
+    submitTexts: ["Submit", "Renew"]
+
+  form:
+    readySelectors:
+      - '[role="combobox"]'
+      - 'input[type="radio"]'
+      - '[role="radio"]'
+      - 'textarea'
+      - '[role="checkbox"]'
+      - 'input[type="checkbox"]'
+    infoJs: "@scripts/form-info.js"
+    selectPermissionJs: "@scripts/select-permission.js"
+    fillJustificationJs: "@scripts/fill-justification.js"
+    checkTermsJs: "@scripts/check-terms.js"
+    roleExcludePatterns:
+      - "INSTRUCTIONS"
+
+  memberships:
+    url: "http://127.0.0.1:8080/portal/memberships"
+    tableReadySelector: "tbody[role='rowgroup'] tr[role='row']"
+    listJs: "@scripts/memberships-list.js"
+    selectJs: "@scripts/memberships-select.js"
+    renewButtonText: "Renew"
+    dialogReadySelector: '[role="dialog"]'
+
+  findButtonJs: "@scripts/find-button.js"
+
+  formReadyJs: "@scripts/form-ready.js"
+
+  findCloseJs: "@scripts/find-close.js"

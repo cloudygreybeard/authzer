@@ -1,0 +1,59 @@
+# authzer RBAC policy for demo — generic entitlement names.
+
+apiVersion: authzer/v1alpha1
+kind: Group
+metadata:
+  name: demo-sre
+justification: "Platform SRE team member requiring operational access."
+
+---
+apiVersion: authzer/v1alpha1
+kind: Role
+metadata:
+  name: demo-operational
+rules:
+  - resource: cloud-storage-a1b2
+    permission: ReadOnly
+    selfLink: "http://127.0.0.1:8080/portal/access/cloud-storage-a1b2"
+  - resource: api-gateway-c3d4
+    permission: ReadWrite
+    selfLink: "http://127.0.0.1:8080/portal/access/api-gateway-c3d4"
+  - resource: log-analytics-e5f6
+    permission: ReadOnly
+    selfLink: "http://127.0.0.1:8080/portal/access/log-analytics-e5f6"
+  - resource: key-vault-k1l2
+    permission: ReadOnly
+    selfLink: "http://127.0.0.1:8080/portal/access/key-vault-k1l2"
+
+---
+apiVersion: authzer/v1alpha1
+kind: Role
+metadata:
+  name: demo-cicd
+rules:
+  - resource: container-reg-g7h8
+    permission: ReadWrite
+    selfLink: "http://127.0.0.1:8080/portal/access/container-reg-g7h8"
+
+---
+apiVersion: authzer/v1alpha1
+kind: RoleBinding
+metadata:
+  name: sre-operational
+subjects:
+  - kind: Group
+    name: demo-sre
+roleRef:
+  kind: Role
+  name: demo-operational
+---
+apiVersion: authzer/v1alpha1
+kind: RoleBinding
+metadata:
+  name: sre-cicd
+subjects:
+  - kind: Group
+    name: demo-sre
+roleRef:
+  kind: Role
+  name: demo-cicd
