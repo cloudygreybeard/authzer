@@ -1,6 +1,6 @@
 # authzer
 
-Config-driven web access authz management via Chrome DevTools Protocol (CDP).
+Declarative access management, even if the only API is a button.
 
 ## Why
 

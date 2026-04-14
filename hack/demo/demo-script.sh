@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # demo-script.sh — typed-command scenario for authzer public demo.
 #
-# Uses the type_command / run_cmd / comment / demo_pause helpers to
-# produce a human-readable terminal recording via asciinema.
+# Three-act narrative: current state, policy declaration, reconciliation.
+# Uses type_command / run_cmd / comment / demo_pause helpers to produce
+# a human-readable terminal recording via asciinema.
 
 set -euo pipefail
 
@@ -54,41 +55,51 @@ screenshot() {
   fi
 }
 
-# --- Scenario ---
+# --- Act 1: The problem ---
 
 echo
-comment "authzer — declarative access entitlement management"
-demo_pause 2
+comment "authzer — declarative access management,"
+comment "even if the only API is a button."
+echo
+demo_pause 3
 
-comment "Check the version"
-run_cmd "authzer version"
+comment "Six entitlements. Thirty-day expiry. One web portal."
+comment "What does it look like today?"
+echo
 demo_pause 1
-
-comment "List current memberships from the portal"
 run_cmd "authzer get"
-demo_pause 2
+demo_pause 3
 screenshot "01-memberships"
 
-comment "Inspect a specific entitlement"
-run_cmd "authzer get log-analytics-e5f6 -o yaml"
-demo_pause 2
+# --- Act 2: The policy ---
 
-comment "Show the reconciliation plan (client dry-run)"
+echo
+echo
+comment "Access policy is declared as RBAC manifests."
+demo_pause 1
+run_cmd "authzer config policy"
+demo_pause 5
+
+# --- Act 3: Reconcile ---
+
+echo
+echo
+comment "Reconcile policy against the portal."
+comment "First, plan locally — no browser needed."
+echo
+demo_pause 1
 run_cmd "authzer apply --dry-run=client --sort-by expiry"
+demo_pause 4
+
+echo
+echo
+comment "Now prepare the forms in the browser."
+echo
+demo_pause 1
+run_cmd "authzer apply --accept-terms"
 demo_pause 3
+screenshot "02-extend-forms"
 
-comment "Prepare extend forms in the browser (server dry-run)"
-run_cmd "authzer apply --dry-run=server --accept-terms"
-demo_pause 3
-screenshot "02-extend-dialog"
-
-comment "Submit the renewals"
-run_cmd "authzer apply --dry-run=none --accept-terms --log-file audit.jsonl"
-demo_pause 2
-
-comment "Review the structured audit log"
-run_cmd "cat audit.jsonl | jq ."
-demo_pause 3
-
+echo
 comment "Done."
 echo
