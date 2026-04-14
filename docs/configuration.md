@@ -491,7 +491,7 @@ templates:
     group: {{ .group }}
     portal:
       memberships:
-        url: "{{ .portal_host }}/manage/entitlement"
+        url: "{{ .portal_host }}/portal/memberships"
   policy.yaml: |
     ---
     apiVersion: authzer/v1alpha1
