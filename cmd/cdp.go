@@ -237,7 +237,7 @@ func connectBrowser(ctx context.Context, wsURL string) (context.Context, context
 	allocCtx, allocCancel := chromedp.NewRemoteAllocator(ctx, wsURL)
 
 	var opts []chromedp.ContextOption
-	if auditLog.Enabled(LevelDebug) {
+	if verbosity >= 9 {
 		opts = append(opts, chromedp.WithDebugf(log.New(os.Stderr, "cdp: ", log.Lmicroseconds).Printf))
 	}
 
@@ -400,11 +400,8 @@ func checkTerms(ctx context.Context) error {
 func renewResource(ctx context.Context, url string, kind string, opts renewOpts) Resource {
 	res := Resource{Kind: kind, SelfLink: url}
 	logf := func(format string, args ...any) {
-		if !auditLog.Enabled(LevelDebug) {
-			return
-		}
 		msg := fmt.Sprintf(format, args...)
-		logHuman("  [verbose] %s\n", msg)
+		logV(5, "%s", msg)
 		auditLog.Debug("cdp.renew", map[string]any{"resource": url, "msg": msg})
 	}
 
@@ -459,12 +456,14 @@ func renewResource(ctx context.Context, url string, kind string, opts renewOpts)
 	time.Sleep(opts.SettleDelay)
 
 	logf("extracting page info")
+	logV(8, "pageInfoJS script:\n%s", pageInfoJS)
 	var rawPage string
 	if err := chromedp.Run(tabCtx, chromedp.Evaluate(pageInfoJS, &rawPage)); err != nil {
 		closeTab()
 		res.Error = fmt.Sprintf("page eval: %v", err)
 		return res
 	}
+	logV(6, "pageInfo result: %s", truncateForLog([]byte(rawPage), 2048))
 	var pi pageInfoRaw
 	if err := json.Unmarshal([]byte(rawPage), &pi); err != nil {
 		closeTab()
@@ -584,11 +583,8 @@ func renewResource(ctx context.Context, url string, kind string, opts renewOpts)
 func renewMembership(ctx context.Context, name string, opts renewOpts) Resource {
 	res := Resource{Name: name}
 	logf := func(format string, args ...any) {
-		if !auditLog.Enabled(LevelDebug) {
-			return
-		}
 		msg := fmt.Sprintf(format, args...)
-		logHuman("  [verbose] %s\n", msg)
+		logV(5, "%s", msg)
 		auditLog.Debug("cdp.renew", map[string]any{"resource": name, "msg": msg})
 	}
 
@@ -762,11 +758,8 @@ func renewMembership(ctx context.Context, name string, opts renewOpts) Resource 
 // returns structured membership data.
 func listMemberships(ctx context.Context, opts surveyOpts) ([]Membership, error) {
 	logf := func(format string, args ...any) {
-		if !auditLog.Enabled(LevelDebug) {
-			return
-		}
 		msg := fmt.Sprintf(format, args...)
-		logHuman("  [verbose] %s\n", msg)
+		logV(5, "%s", msg)
 		auditLog.Debug("cdp.memberships", map[string]any{"msg": msg})
 	}
 
@@ -805,10 +798,12 @@ func listMemberships(ctx context.Context, opts surveyOpts) ([]Membership, error)
 	time.Sleep(opts.SettleDelay)
 
 	logf("extracting membership data")
+	logV(8, "listJS script:\n%s", listJS)
 	var raw string
 	if err := chromedp.Run(tabCtx, chromedp.Evaluate(listJS, &raw)); err != nil {
 		return nil, fmt.Errorf("memberships eval: %w", err)
 	}
+	logV(6, "memberships result: %s", truncateForLog([]byte(raw), 2048))
 
 	var memberships []Membership
 	if err := json.Unmarshal([]byte(raw), &memberships); err != nil {
@@ -833,11 +828,8 @@ func listMemberships(ctx context.Context, opts surveyOpts) ([]Membership, error)
 func surveyResource(ctx context.Context, url string, kind string, opts surveyOpts) Resource {
 	ent := Resource{Kind: kind, SelfLink: url}
 	logf := func(format string, args ...any) {
-		if !auditLog.Enabled(LevelDebug) {
-			return
-		}
 		msg := fmt.Sprintf(format, args...)
-		logHuman("  [verbose] %s\n", msg)
+		logV(5, "%s", msg)
 		auditLog.Debug("cdp.survey", map[string]any{"resource": url, "msg": msg})
 	}
 
@@ -884,11 +876,13 @@ func surveyResource(ctx context.Context, url string, kind string, opts surveyOpt
 	time.Sleep(opts.SettleDelay)
 
 	logf("extracting page info via JS")
+	logV(8, "pageInfoJS script:\n%s", pageInfoJS)
 	var rawPage string
 	if err := chromedp.Run(tabCtx, chromedp.Evaluate(pageInfoJS, &rawPage)); err != nil {
 		ent.Error = fmt.Sprintf("page eval: %v", err)
 		return ent
 	}
+	logV(6, "pageInfo result: %s", truncateForLog([]byte(rawPage), 2048))
 	var pi pageInfoRaw
 	if err := json.Unmarshal([]byte(rawPage), &pi); err != nil {
 		ent.Error = fmt.Sprintf("page unmarshal: %v", err)
@@ -981,11 +975,13 @@ func surveyResource(ctx context.Context, url string, kind string, opts surveyOpt
 	}
 
 	logf("extracting form info via JS")
+	logV(8, "formInfoJS script:\n%s", formInfoJS)
 	var rawForm string
 	if err := chromedp.Run(tabCtx, chromedp.Evaluate(formInfoJS, &rawForm)); err != nil {
 		ent.Error = fmt.Sprintf("form eval: %v", err)
 		return ent
 	}
+	logV(6, "formInfo result: %s", truncateForLog([]byte(rawForm), 2048))
 	var fi formInfoRaw
 	if err := json.Unmarshal([]byte(rawForm), &fi); err != nil {
 		ent.Error = fmt.Sprintf("form unmarshal: %v", err)
