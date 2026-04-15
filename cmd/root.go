@@ -36,11 +36,12 @@ var (
 
 var rootCmd = &cobra.Command{
 	Use:   "authzer",
-	Short: "Config-driven web access authz management via CDP",
-	Long: `authzer automates web-based access entitlement management using
-Chrome DevTools Protocol (CDP). It connects to a running browser,
-queries membership status, and reconciles against RBAC policy by
-renewing expiring memberships or requesting new ones.
+	Short: "Declarative access management, even if the only API is a button",
+	Long: `Declarative access management, even if the only API is a button.
+
+authzer connects to a running browser via Chrome DevTools Protocol (CDP),
+queries membership status, and reconciles against RBAC policy by renewing
+expiring memberships or requesting new ones.
 
 All portal-specific details come from a YAML config file.`,
 	SilenceUsage: true,
