@@ -120,10 +120,19 @@ authzer doctor
 authzer config import -f site-pack.yaml
 authzer config import -f site-pack.yaml --values values.yaml
 
+# Import from a remote URL (requires trusted source)
+authzer config import -f https://example.com/site-pack.yaml
+
 # Context management
 authzer config list
 authzer config current
 authzer config use staging
+
+# Trust management for remote imports
+authzer config trust add example.com
+authzer config trust add-identity user@example.com --issuer https://github.com/login/oauth
+authzer config trust add-key ~/.ssh/id_ed25519.pub
+authzer config trust list
 
 # Override context for a single command
 authzer --context staging get
@@ -376,6 +385,39 @@ portal:
 
 At runtime, `authzer` resolves `@`-prefixed values to file paths relative to
 the config file location.
+
+### Trust and verification
+
+Remote site-pack imports are verified against a configurable trust chain.
+Three verification methods are supported, tried in priority order:
+
+| Method | Trust anchor | Sidecar file | Tool required |
+|--------|-------------|--------------|---------------|
+| Sigstore | OIDC identity (e.g. email) | `.sigstore.json` | `cosign` |
+| SSH | SSH public key | `.sig` | `ssh-keygen` |
+| Domain | Hostname allowlist | none | none |
+
+When importing from a URL, `authzer` checks for a sigstore bundle or SSH
+signature alongside the manifest. If found, the signature must verify
+against a trusted identity or key. If no signature exists, the source
+domain must be in the trusted list.
+
+To skip verification for a one-off import (not recommended):
+
+```bash
+authzer config import -f https://untrusted.example.com/pack.yaml \
+  --insecure-skip-source-verify
+```
+
+Publishers sign site-packs using standard tooling:
+
+```bash
+# Sigstore (keyless, authenticates via OIDC):
+cosign sign-blob --bundle site-pack.yaml.sigstore.json site-pack.yaml
+
+# SSH (sign with an existing key):
+ssh-keygen -Y sign -f ~/.ssh/id_ed25519 -n authzer site-pack.yaml
+```
 
 ## Development
 
