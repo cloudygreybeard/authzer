@@ -68,7 +68,8 @@ func init() {
 	rootCmd.PersistentFlags().String("dry-run", "server",
 		`dry-run mode: "client" (local policy only, no browser), "server" (browser connected, `+
 			`prepare forms but do not submit), "none" (full execution)`)
-	rootCmd.PersistentFlags().BoolP("verbose", "v", false, "verbose/debug output (shorthand for --log-level=debug --log-file=stderr)")
+	rootCmd.PersistentFlags().CountP("verbose", "v",
+		"verbosity (1=operations, 2=decisions, 4=debug, 5=trace, 9=CDP wire)")
 	rootCmd.PersistentFlags().String("log-file", "", `structured JSONL log destination (path, "-" for stdout, "stderr" for stderr)`)
 	rootCmd.PersistentFlags().String("log-level", "info", `minimum log level: debug, info, warn, error`)
 	rootCmd.PersistentFlags().BoolP("quiet", "q", false, "suppress human-readable stderr output")
@@ -243,7 +244,7 @@ func initConfig(cmd *cobra.Command) error {
 
 	viper.SetDefault("concurrency", 3)
 	viper.SetDefault("settleDelay", "1s")
-	viper.SetDefault("verbose", false)
+	viper.SetDefault("verbose", 0)
 
 	viper.SetDefault("policy", "policy.yaml")
 	viper.SetDefault("renewWithinDays", 30)
@@ -261,7 +262,7 @@ func initConfig(cmd *cobra.Command) error {
 		if v := viper.GetString("apiVersion"); v != "" && v != APIVersion {
 			return fmt.Errorf("unsupported config apiVersion %q (expected %s)", v, APIVersion)
 		}
-		if viper.GetBool("verbose") {
+		if viper.GetInt("verbose") > 0 {
 			logHuman("Using config: %s\n", viper.ConfigFileUsed())
 		}
 	}
@@ -303,11 +304,9 @@ func initAuditLog() error {
 	logLevel := ParseLevel(viper.GetString("log.level"))
 	logDest := viper.GetString("log.file")
 
-	// --verbose enables debug-level human output ([verbose] lines on
-	// stderr) for backward compatibility. It does not emit JSONL unless
-	// --log-file is also set.
-	verboseOnly := viper.GetBool("verbose") && logDest == ""
-	if viper.GetBool("verbose") {
+	verbosity = viper.GetInt("verbose")
+	verboseOnly := verbosity > 0 && logDest == ""
+	if verbosity > 0 {
 		logLevel = LevelDebug
 	}
 
