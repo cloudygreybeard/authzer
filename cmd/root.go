@@ -294,7 +294,7 @@ var logFile *os.File
 // Call from main() via defer.
 func CloseAuditLog() {
 	if logFile != nil {
-		logFile.Close()
+		_ = logFile.Close()
 		logFile = nil
 	}
 }
