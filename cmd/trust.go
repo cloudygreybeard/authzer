@@ -280,10 +280,23 @@ func verifySource(sourceURL string, manifest []byte, reg *ContextRegistry) (stri
 // URL utilities
 // ---------------------------------------------------------------------------
 
-// fetchURL retrieves the content at the given URL.
+// fetchURL retrieves the content at the given URL. For github.com URLs,
+// it attempts to use `gh auth token` to add authorization, enabling
+// downloads from private/EMU repositories when the gh CLI is authenticated.
 func fetchURL(rawURL string) ([]byte, error) {
+	req, err := http.NewRequest("GET", rawURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating request for %s: %w", rawURL, err)
+	}
+
+	if strings.Contains(rawURL, "github.com") {
+		if token, err := exec.Command("gh", "auth", "token").Output(); err == nil {
+			req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(token)))
+		}
+	}
+
 	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Get(rawURL)
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("fetching %s: %w", rawURL, err)
 	}
