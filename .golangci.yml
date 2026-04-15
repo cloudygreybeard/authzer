@@ -1,0 +1,7 @@
+linters-settings:
+  errcheck:
+    exclude-functions:
+      - fmt.Fprint
+      - fmt.Fprintf
+      - fmt.Fprintln
+      - (net/http.ResponseWriter).Write

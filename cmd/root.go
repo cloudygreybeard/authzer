@@ -285,9 +285,19 @@ func initConfig(cmd *cobra.Command) error {
 	return nil
 }
 
-// logFile holds a reference to the opened log file so it can be closed
-// on process exit. Nil when logging to stdout/stderr/discard.
+// logFile holds a reference to the opened audit log file so it can be
+// closed on process exit via CloseAuditLog. Nil when logging to
+// stdout/stderr/discard.
 var logFile *os.File
+
+// CloseAuditLog flushes and closes the audit log file, if one is open.
+// Call from main() via defer.
+func CloseAuditLog() {
+	if logFile != nil {
+		logFile.Close()
+		logFile = nil
+	}
+}
 
 func initAuditLog() error {
 	logLevel := ParseLevel(viper.GetString("log.level"))
