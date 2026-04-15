@@ -175,8 +175,8 @@ func runGet(cmd *cobra.Command, args []string) error {
 		}
 	} else {
 		details, _ = readCache(cachePath)
-		if auditLog.Enabled(LevelDebug) && len(details) > 0 {
-			logHuman("Loaded %d cached resource details from %s\n", len(details), cachePath)
+		if len(details) > 0 {
+			logV(3, "loaded %d cached resource details from %s", len(details), cachePath)
 		}
 	}
 
