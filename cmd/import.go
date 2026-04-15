@@ -42,19 +42,26 @@ When --values is not provided, the command prompts interactively for
 each value defined in the manifest. Supplied values are saved to the
 context directory for future re-imports.
 
+The -f flag accepts a local file path or an HTTPS URL. Remote sources
+must be in the trusted sources list (see "authzer config trust") unless
+--insecure-skip-source-verify is set. Remote content is fetched once at
+import time; runtime script loading is always local.
+
 Example:
 
   authzer config import -f site-pack.yaml
+  authzer config import -f https://example.com/site-pack.yaml
   authzer config import -f site-pack.yaml --values values.yaml
   authzer config import -f site-pack.yaml --context staging`,
 	RunE: runImport,
 }
 
 func init() {
-	configImportCmd.Flags().StringP("file", "f", "", "path to SitePack manifest (required)")
+	configImportCmd.Flags().StringP("file", "f", "", "path or URL to SitePack manifest (required)")
 	_ = configImportCmd.MarkFlagRequired("file")
 	configImportCmd.Flags().String("values", "", "path to values file (skips interactive prompts)")
 	configImportCmd.Flags().String("context", "", "context name (defaults to manifest metadata.name)")
+	configImportCmd.Flags().Bool("insecure-skip-source-verify", false, "skip domain trust verification for remote sources (not recommended)")
 	configCmd.AddCommand(configImportCmd)
 }
 
@@ -62,10 +69,38 @@ func runImport(cmd *cobra.Command, _ []string) error {
 	manifestPath, _ := cmd.Flags().GetString("file")
 	valuesPath, _ := cmd.Flags().GetString("values")
 	ctxOverride, _ := cmd.Flags().GetString("context")
+	insecure, _ := cmd.Flags().GetBool("insecure-skip-source-verify")
 
-	raw, err := os.ReadFile(manifestPath)
-	if err != nil {
-		return fmt.Errorf("reading manifest: %w", err)
+	var raw []byte
+	var source string
+
+	if isURL(manifestPath) {
+		var err error
+		raw, err = fetchURL(manifestPath)
+		if err != nil {
+			return err
+		}
+		source = manifestPath
+		if !insecure {
+			reg, err := loadRegistry()
+			if err != nil {
+				return err
+			}
+			identity, err := verifySource(manifestPath, raw, reg)
+			if err != nil {
+				return err
+			}
+			logHuman("  Verified:  %s\n", identity)
+		} else {
+			logHuman("  Warning:   source verification skipped (--insecure-skip-source-verify)\n")
+		}
+	} else {
+		var err error
+		raw, err = os.ReadFile(manifestPath)
+		if err != nil {
+			return fmt.Errorf("reading manifest: %w", err)
+		}
+		source = manifestPath
 	}
 
 	var sp SitePack
@@ -88,11 +123,7 @@ func runImport(cmd *cobra.Command, _ []string) error {
 		ctxName = strings.TrimSuffix(filepath.Base(manifestPath), filepath.Ext(manifestPath))
 	}
 
-	logHuman("Importing SitePack: %s (context: %s)\n", sp.Metadata.Name, ctxName)
-	if desc := sp.Metadata.Annotations["description"]; desc != "" {
-		logHuman("  %s\n", desc)
-	}
-	logHuman("\n")
+	printImportSummary(sp, source, ctxName)
 
 	vals, err := resolveValues(sp.Values, valuesPath)
 	if err != nil {
@@ -229,4 +260,41 @@ func sortedKeys(m map[string]string) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+func printImportSummary(sp SitePack, source, ctxName string) {
+	logHuman("Importing SitePack: %s (context: %s)\n", sp.Metadata.Name, ctxName)
+	if desc := sp.Metadata.Annotations["description"]; desc != "" {
+		logHuman("  %s\n", desc)
+	}
+	logHuman("\n")
+	logHuman("  Source:     %s\n", source)
+
+	tplNames := sortedKeys(sp.Templates)
+	if len(tplNames) > 0 {
+		logHuman("  Templates:  %s\n", strings.Join(tplNames, ", "))
+	}
+
+	dataNames := sortedKeys(sp.Data)
+	if len(dataNames) > 0 {
+		dirs := make(map[string]int)
+		for _, n := range dataNames {
+			d := filepath.Dir(n)
+			if d == "." {
+				d = "(root)"
+			}
+			dirs[d]++
+		}
+		parts := make([]string, 0, len(dirs))
+		for d, c := range dirs {
+			parts = append(parts, fmt.Sprintf("%d files (%s)", c, d))
+		}
+		sort.Strings(parts)
+		logHuman("  Data:       %s\n", strings.Join(parts, ", "))
+	}
+
+	if len(sp.Values) > 0 {
+		logHuman("  Values:     %d parameters\n", len(sp.Values))
+	}
+	logHuman("\n")
 }
