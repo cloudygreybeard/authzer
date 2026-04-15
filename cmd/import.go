@@ -75,13 +75,16 @@ func runImport(cmd *cobra.Command, _ []string) error {
 	var source string
 
 	if isURL(manifestPath) {
+		logV(1, "import: fetching manifest from URL %s", manifestPath)
 		var err error
 		raw, err = fetchURL(manifestPath)
 		if err != nil {
 			return err
 		}
+		logV(2, "import: received %d byte manifest", len(raw))
 		source = manifestPath
 		if !insecure {
+			logV(1, "import: verifying source")
 			reg, err := loadRegistry()
 			if err != nil {
 				return err
@@ -95,6 +98,7 @@ func runImport(cmd *cobra.Command, _ []string) error {
 			logHuman("  Warning:   source verification skipped (--insecure-skip-source-verify)\n")
 		}
 	} else {
+		logV(1, "import: reading manifest from %s", manifestPath)
 		var err error
 		raw, err = os.ReadFile(manifestPath)
 		if err != nil {
@@ -200,7 +204,13 @@ func resolveValues(defs []SitePackValue, valuesPath string) (map[string]interfac
 	vals := make(map[string]interface{})
 
 	if valuesPath != "" {
-		raw, err := os.ReadFile(valuesPath)
+		var raw []byte
+		var err error
+		if isURL(valuesPath) {
+			raw, err = fetchURL(valuesPath)
+		} else {
+			raw, err = os.ReadFile(valuesPath)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("reading values file: %w", err)
 		}

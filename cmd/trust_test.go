@@ -357,6 +357,86 @@ func TestIsURL(t *testing.T) {
 	}
 }
 
+func TestSidecarURL(t *testing.T) {
+	tests := []struct {
+		base, suffix, want string
+	}{
+		{"https://host/file.yaml", ".sig", "https://host/file.yaml.sig"},
+		{"https://host/file.yaml?ref=v1", ".sig", "https://host/file.yaml.sig?ref=v1"},
+		{"https://host/path//file.yaml?ref=main", ".sigstore.json", "https://host/path//file.yaml.sigstore.json?ref=main"},
+		{"https://github.com/org/repo/dir/file.yaml?ref=v1", ".sig", "https://github.com/org/repo/dir/file.yaml.sig?ref=v1"},
+	}
+	for _, tc := range tests {
+		if got := sidecarURL(tc.base, tc.suffix); got != tc.want {
+			t.Errorf("sidecarURL(%q, %q) = %q, want %q", tc.base, tc.suffix, got, tc.want)
+		}
+	}
+}
+
+func TestParseGitFileURL(t *testing.T) {
+	tests := []struct {
+		input    string
+		wantRepo string
+		wantPath string
+		wantRef  string
+		wantOK   bool
+	}{
+		// Known forge: github.com (no // needed).
+		{
+			"https://github.com/org/repo/path/to/file.yaml?ref=v1",
+			"https://github.com/org/repo", "path/to/file.yaml", "v1", true,
+		},
+		{
+			"https://github.com/org/repo/file.yaml",
+			"https://github.com/org/repo", "file.yaml", "HEAD", true,
+		},
+		// Known forge: gitlab.com.
+		{
+			"https://gitlab.com/org/repo/dir/file?ref=main",
+			"https://gitlab.com/org/repo", "dir/file", "main", true,
+		},
+		// Explicit // separator (kustomize compat, self-hosted).
+		{
+			"https://git.example.com/group/repo//path/to/file.yaml?ref=v1",
+			"https://git.example.com/group/repo", "path/to/file.yaml", "v1", true,
+		},
+		// .git boundary.
+		{
+			"https://git.example.com/org/repo.git/path/file.yaml?ref=v1",
+			"https://git.example.com/org/repo.git", "path/file.yaml", "v1", true,
+		},
+		// // on known forge still works.
+		{
+			"https://github.com/org/repo//file.yaml",
+			"https://github.com/org/repo", "file.yaml", "HEAD", true,
+		},
+		// Plain URL (no forge, no //, no .git).
+		{"https://example.com/plain-url.yaml", "", "", "", false},
+		// Local file.
+		{"./local-file.yaml", "", "", "", false},
+		// Bare repo URL (no file path).
+		{"https://github.com/org/repo", "", "", "", false},
+		// Trailing slash only.
+		{"https://github.com/org/repo/", "", "", "", false},
+		// Empty path after //.
+		{"https://git.example.com/org/repo//", "", "", "", false},
+	}
+	for _, tc := range tests {
+		repo, path, ref, ok := parseGitFileURL(tc.input)
+		if ok != tc.wantOK {
+			t.Errorf("parseGitFileURL(%q): ok=%v, want %v", tc.input, ok, tc.wantOK)
+			continue
+		}
+		if !ok {
+			continue
+		}
+		if repo != tc.wantRepo || path != tc.wantPath || ref != tc.wantRef {
+			t.Errorf("parseGitFileURL(%q) = (%q, %q, %q), want (%q, %q, %q)",
+				tc.input, repo, path, ref, tc.wantRepo, tc.wantPath, tc.wantRef)
+		}
+	}
+}
+
 func TestFetchURL(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, "kind: SitePack\nmetadata:\n  name: test\n")

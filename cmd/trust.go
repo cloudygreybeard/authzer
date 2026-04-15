@@ -98,9 +98,11 @@ type SigstoreVerifier struct {
 func (v *SigstoreVerifier) Name() string { return "sigstore" }
 
 func (v *SigstoreVerifier) Verify(sourceURL string, manifest []byte) (string, error) {
-	bundleURL := sourceURL + ".sigstore.json"
+	bundleURL := sidecarURL(sourceURL, ".sigstore.json")
+	logV(2, "sigstore: looking for bundle at %s", bundleURL)
 	bundle, err := fetchURL(bundleURL)
 	if err != nil {
+		logV(2, "sigstore: no bundle found, skipping")
 		return "", &errNoSignature{method: "sigstore"}
 	}
 
@@ -108,6 +110,7 @@ func (v *SigstoreVerifier) Verify(sourceURL string, manifest []byte) (string, er
 	if err != nil {
 		return "", fmt.Errorf("sigstore bundle found but cosign is not installed\n\nInstall cosign: https://docs.sigstore.dev/cosign/system_config/installation/")
 	}
+	logV(4, "sigstore: using cosign at %s", cosignPath)
 
 	tmpDir, err := os.MkdirTemp("", "authzer-verify-*")
 	if err != nil {
@@ -136,13 +139,16 @@ func (v *SigstoreVerifier) Verify(sourceURL string, manifest []byte) (string, er
 		}
 		args = append(args, manifestFile)
 
+		logV(4, "exec: cosign %s", strings.Join(args, " "))
 		cmd := exec.Command(cosignPath, args...)
 		var stderr bytes.Buffer
 		cmd.Stderr = &stderr
 		if err := cmd.Run(); err == nil {
+			logV(2, "sigstore: verified against identity %s", identity.Subject)
 			return fmt.Sprintf("sigstore identity: %s", identity.Subject), nil
 		}
 		lastStderr = strings.TrimSpace(stderr.String())
+		logV(4, "sigstore: identity %s failed: %s", identity.Subject, lastStderr)
 	}
 
 	return "", fmt.Errorf("sigstore verification failed against all %d trusted identities\n\nlast error: %s", len(v.TrustedIdentities), lastStderr)
@@ -166,9 +172,11 @@ type SSHVerifier struct {
 func (v *SSHVerifier) Name() string { return "ssh" }
 
 func (v *SSHVerifier) Verify(sourceURL string, manifest []byte) (string, error) {
-	sigURL := sourceURL + ".sig"
+	sigURL := sidecarURL(sourceURL, ".sig")
+	logV(2, "ssh: looking for signature at %s", sigURL)
 	sig, err := fetchURL(sigURL)
 	if err != nil {
+		logV(2, "ssh: no signature found, skipping")
 		return "", &errNoSignature{method: "ssh"}
 	}
 
@@ -176,6 +184,8 @@ func (v *SSHVerifier) Verify(sourceURL string, manifest []byte) (string, error) 
 	if err != nil {
 		return "", fmt.Errorf("SSH signature found but ssh-keygen is not in PATH")
 	}
+	logV(4, "ssh: using ssh-keygen at %s", sshKeygenPath)
+	logV(2, "ssh: verifying against %d trusted keys", len(v.TrustedKeys))
 
 	tmpDir, err := os.MkdirTemp("", "authzer-verify-*")
 	if err != nil {
@@ -197,22 +207,21 @@ func (v *SSHVerifier) Verify(sourceURL string, manifest []byte) (string, error) 
 		return "", fmt.Errorf("writing allowed_signers: %w", err)
 	}
 
-	cmd := exec.Command(sshKeygenPath,
-		"-Y", "verify",
-		"-f", allowedFile,
-		"-I", "authzer",
-		"-n", "authzer",
-		"-s", sigFile,
-	)
+	args := []string{"-Y", "verify", "-f", allowedFile, "-I", "authzer", "-n", "authzer", "-s", sigFile}
+	logV(4, "exec: ssh-keygen %s", strings.Join(args, " "))
+	cmd := exec.Command(sshKeygenPath, args...)
 	cmd.Stdin = bytes.NewReader(manifest)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("SSH signature verification failed: %s", strings.TrimSpace(stderr.String()))
+		errMsg := strings.TrimSpace(stderr.String())
+		logV(2, "ssh: verification failed: %s", errMsg)
+		return "", fmt.Errorf("SSH signature verification failed: %s", errMsg)
 	}
 
 	id := identityFromSSHVerifyOutput(stderr.String(), v.TrustedKeys)
+	logV(2, "ssh: verified: %s", id)
 	return fmt.Sprintf("ssh key: %s", id), nil
 }
 
@@ -263,13 +272,17 @@ func verifySource(sourceURL string, manifest []byte, reg *ContextRegistry) (stri
 	}
 
 	for _, v := range verifiers {
+		logV(2, "verify: trying %s verifier", v.Name())
 		id, err := v.Verify(sourceURL, manifest)
 		if err == nil {
+			logV(1, "verify: source verified via %s: %s", v.Name(), id)
 			return fmt.Sprintf("[%s] %s", v.Name(), id), nil
 		}
 		if _, ok := err.(*errNoSignature); ok {
+			logV(2, "verify: %s has no signature, falling through", v.Name())
 			continue
 		}
+		logV(2, "verify: %s failed: %v", v.Name(), err)
 		return "", err
 	}
 
@@ -280,27 +293,41 @@ func verifySource(sourceURL string, manifest []byte, reg *ContextRegistry) (stri
 // URL utilities
 // ---------------------------------------------------------------------------
 
-// fetchURL retrieves the content at the given URL. For github.com URLs,
-// it attempts to use `gh auth token` to add authorization, enabling
-// downloads from private/EMU repositories when the gh CLI is authenticated.
+// fetchURL retrieves the content at the given URL. It supports two
+// URL styles:
+//
+//   - Git repository URLs, fetched via shallow git clone. Auth is
+//     delegated to the configured git credential helper (gh, GCM,
+//     netrc, etc.) -- the same mechanism used by Go modules and
+//     kustomize. The repo/path boundary is detected automatically
+//     for known forges (github.com, gitlab.com, bitbucket.org, etc.)
+//     or via an explicit "//" separator for self-hosted instances.
+//
+//     https://github.com/OWNER/REPO/path/to/file?ref=v1
+//     https://git.example.com/group/repo//path/to/file?ref=v1
+//
+//   - Plain HTTPS URLs, fetched with a standard HTTP GET.
 func fetchURL(rawURL string) ([]byte, error) {
-	req, err := http.NewRequest("GET", rawURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("creating request for %s: %w", rawURL, err)
+	if repoURL, filePath, ref, ok := parseGitFileURL(rawURL); ok {
+		logV(1, "fetching %s from git repo %s@%s", filePath, repoURL, ref)
+		return fetchGitFile(repoURL, filePath, ref)
 	}
 
-	if strings.Contains(rawURL, "github.com") {
-		if token, err := exec.Command("gh", "auth", "token").Output(); err == nil {
-			req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(token)))
-		}
-	}
-
+	logV(1, "fetching %s via HTTP GET", rawURL)
 	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := client.Get(rawURL)
 	if err != nil {
 		return nil, fmt.Errorf("fetching %s: %w", rawURL, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
+	logV(7, "HTTP GET %s -> %d %s", rawURL, resp.StatusCode, resp.Status)
+	if verbosity >= 7 {
+		for k, vals := range resp.Header {
+			for _, v := range vals {
+				logV(7, "  %s: %s", k, v)
+			}
+		}
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("fetching %s: HTTP %d", rawURL, resp.StatusCode)
 	}
@@ -308,12 +335,162 @@ func fetchURL(rawURL string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading response from %s: %w", rawURL, err)
 	}
+	logV(3, "received %d bytes from %s", len(body), rawURL)
+	logV(6, "content from %s:\n%s", rawURL, truncateForLog(body, 2048))
+	logV(8, "full content from %s:\n%s", rawURL, string(body))
 	return body, nil
+}
+
+// knownForgeSegments maps forge hostnames to the number of path
+// segments that form the repository root. For example, github.com
+// uses {owner}/{repo} = 2 segments.
+var knownForgeSegments = map[string]int{
+	"github.com":    2,
+	"gitlab.com":    2,
+	"bitbucket.org": 2,
+	"sr.ht":         2,
+	"codeberg.org":  2,
+}
+
+// parseGitFileURL detects git repository file references in a URL and
+// splits them into repo clone URL, file path within the repo, and ref.
+//
+// Detection strategies (in order):
+//  1. Known forge hosts -- the repo root is inferred from the URL
+//     structure (e.g. github.com always uses {owner}/{repo}).
+//  2. Explicit "//" separator (kustomize convention) -- for self-hosted
+//     or unusual forges.
+//  3. ".git" in the URL path -- the repo root ends at ".git".
+//
+// An optional ?ref=TAG query parameter pins the clone to a tag or
+// branch (defaults to HEAD).
+func parseGitFileURL(rawURL string) (repoURL, filePath, ref string, ok bool) {
+	u, err := url.Parse(rawURL)
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") {
+		return "", "", "", false
+	}
+
+	ref = "HEAD"
+	if r := u.Query().Get("ref"); r != "" {
+		ref = r
+	}
+
+	cleanPath := strings.TrimPrefix(u.Path, "/")
+
+	// Strategy 1: known forge host.
+	if segments, known := knownForgeSegments[u.Host]; known {
+		parts := strings.SplitN(cleanPath, "/", segments+1)
+		if len(parts) > segments {
+			filePath = strings.TrimLeft(parts[segments], "/")
+			if filePath != "" {
+				repoURL = fmt.Sprintf("%s://%s/%s", u.Scheme, u.Host, strings.Join(parts[:segments], "/"))
+				logV(2, "parsed URL as %s forge: repo=%s path=%s ref=%s", u.Host, repoURL, filePath, ref)
+				return repoURL, filePath, ref, true
+			}
+		}
+	}
+
+	// Strategy 2: explicit "//" separator.
+	schemeEnd := strings.Index(rawURL, "://")
+	if schemeEnd >= 0 {
+		searchFrom := schemeEnd + 3
+		if idx := strings.Index(rawURL[searchFrom:], "//"); idx >= 0 {
+			idx += searchFrom
+			base := rawURL[:idx]
+			remainder := rawURL[idx+2:]
+			if qIdx := strings.Index(remainder, "?"); qIdx >= 0 {
+				remainder = remainder[:qIdx]
+			}
+			filePath = strings.TrimPrefix(remainder, "/")
+			if filePath != "" {
+				logV(2, "parsed URL with // separator: repo=%s path=%s ref=%s", base, filePath, ref)
+				return base, filePath, ref, true
+			}
+		}
+	}
+
+	// Strategy 3: ".git" in URL path.
+	if dotGit := strings.Index(rawURL, ".git/"); dotGit >= 0 {
+		repoURL = rawURL[:dotGit+4]
+		remainder := rawURL[dotGit+5:]
+		if qIdx := strings.Index(remainder, "?"); qIdx >= 0 {
+			remainder = remainder[:qIdx]
+		}
+		filePath = strings.TrimPrefix(remainder, "/")
+		if filePath != "" {
+			logV(2, "parsed URL with .git boundary: repo=%s path=%s ref=%s", repoURL, filePath, ref)
+			return repoURL, filePath, ref, true
+		}
+	}
+
+	return "", "", "", false
+}
+
+// fetchGitFile does a shallow clone of the given repo at the specified
+// ref, reads the requested file, and cleans up. Authentication is
+// handled by whatever git credential helper is configured (gh, GCM,
+// netrc, keychain, etc.).
+func fetchGitFile(repoURL, filePath, ref string) ([]byte, error) {
+	tmpDir, err := os.MkdirTemp("", "authzer-git-*")
+	if err != nil {
+		return nil, fmt.Errorf("creating temp dir: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+
+	args := []string{"clone", "--depth", "1", "--single-branch"}
+	if ref != "HEAD" {
+		args = append(args, "--branch", ref)
+	}
+	args = append(args, repoURL, tmpDir)
+
+	logV(4, "exec: git %s", strings.Join(args, " "))
+	cmd := exec.Command("git", args...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("git clone %s: %s: %w",
+			repoURL, strings.TrimSpace(stderr.String()), err)
+	}
+	if s := strings.TrimSpace(stderr.String()); s != "" {
+		logV(7, "git stderr: %s", s)
+	}
+	logV(4, "cloned %s@%s to %s", repoURL, ref, tmpDir)
+
+	target := filepath.Join(tmpDir, filePath)
+	data, err := os.ReadFile(target)
+	if err != nil {
+		return nil, fmt.Errorf("reading %s from %s@%s: %w", filePath, repoURL, ref, err)
+	}
+	logV(2, "read %d bytes from %s@%s:%s", len(data), repoURL, ref, filePath)
+	logV(6, "content from %s@%s:%s:\n%s", repoURL, ref, filePath, truncateForLog(data, 2048))
+	logV(8, "full content from %s@%s:%s:\n%s", repoURL, ref, filePath, string(data))
+	return data, nil
 }
 
 // isURL returns true if the string looks like an HTTP(S) URL.
 func isURL(s string) bool {
 	return strings.HasPrefix(s, "https://") || strings.HasPrefix(s, "http://")
+}
+
+// truncateForLog returns content as a string, truncated to maxLen
+// bytes with a marker if it exceeds the limit.
+func truncateForLog(data []byte, maxLen int) string {
+	if len(data) <= maxLen {
+		return string(data)
+	}
+	return string(data[:maxLen]) + fmt.Sprintf("\n... truncated (%d bytes total)", len(data))
+}
+
+// sidecarURL appends a suffix to a URL's path component, preserving
+// any query parameters. For example:
+//
+//	sidecarURL("https://host/path/file.yaml?ref=v1", ".sig")
+//	  => "https://host/path/file.yaml.sig?ref=v1"
+func sidecarURL(base, suffix string) string {
+	if qIdx := strings.LastIndex(base, "?"); qIdx >= 0 {
+		return base[:qIdx] + suffix + base[qIdx:]
+	}
+	return base + suffix
 }
 
 // ---------------------------------------------------------------------------
@@ -478,11 +655,20 @@ func removeTrustedIdentity(subject string) error {
 // Trust management: SSH key persistence
 // ---------------------------------------------------------------------------
 
-func addTrustedKeyFromFile(path string) error {
-	data, err := os.ReadFile(path)
+func addTrustedKeyFromFile(pathOrURL string) error {
+	var data []byte
+	var err error
+	if isURL(pathOrURL) {
+		logV(1, "trust: fetching public key from %s", pathOrURL)
+		data, err = fetchURL(pathOrURL)
+	} else {
+		logV(1, "trust: reading public key from %s", pathOrURL)
+		data, err = os.ReadFile(pathOrURL)
+	}
 	if err != nil {
 		return fmt.Errorf("reading public key: %w", err)
 	}
+	logV(2, "trust: received %d byte key", len(data))
 	return addTrustedKeyFromString(strings.TrimSpace(string(data)))
 }
 
@@ -636,19 +822,21 @@ var trustRemoveIdentityCmd = &cobra.Command{
 }
 
 var trustAddKeyCmd = &cobra.Command{
-	Use:   "add-key FILE",
+	Use:   "add-key FILE_OR_URL",
 	Short: "Trust an SSH public key for remote verification",
 	Long: `Add an SSH public key to the trusted list. Remote manifests signed
 with the corresponding private key will be accepted.
 
+The argument can be a local file path or an HTTPS URL. For private
+GitHub repositories, the gh CLI token is used automatically if
+available.
+
 Publisher signing workflow:
   ssh-keygen -Y sign -f ~/.ssh/id_ed25519 -n authzer site-pack.yaml
 
-The signature file (site-pack.yaml.sig) is published alongside the
-manifest. During import, authzer fetches both and verifies locally.
-
-Example:
-  authzer config trust add-key ~/.ssh/id_ed25519.pub`,
+Examples:
+  authzer config trust add-key ~/.ssh/id_ed25519.pub
+  authzer config trust add-key https://github.com/ORG/REPO/releases/latest/download/signing-key.pub`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(_ *cobra.Command, args []string) error {
 		if err := addTrustedKeyFromFile(args[0]); err != nil {
