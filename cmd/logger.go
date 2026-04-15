@@ -121,10 +121,35 @@ var auditLog = NewLogger(nil, LevelInfo)
 // quiet controls whether logHuman output is suppressed.
 var quiet bool
 
+// verbosity holds the current -v level (0 = off, 1..9 = increasing
+// detail). Follows kubectl convention.
+var verbosity int
+
 // logHuman writes human-readable output to stderr unless --quiet is set.
 func logHuman(format string, args ...any) {
 	if quiet {
 		return
 	}
 	fmt.Fprintf(os.Stderr, format, args...)
+}
+
+// logV writes human-readable debug output to stderr at the given
+// verbosity level. Output is shown only when -v is at least the
+// requested level. Levels follow kubectl convention:
+//
+//	0  always visible (normal output)
+//	1  high-level operations ("importing site-pack ...", "fetching ...")
+//	2  key decisions ("parsed URL as github.com forge", "verification result")
+//	3  extended info (config resolution, policy matching, byte counts)
+//	4  debug: external commands ("exec: git clone ...", "exec: ssh-keygen ...")
+//	5  trace: step-by-step browser automation progress
+//	6  display fetched resources (manifests, keys, signatures)
+//	7  credential and HTTP details (git credential flow, headers)
+//	8  full content (response bodies, JS scripts)
+//	9  CDP wire protocol (untruncated DevTools messages)
+func logV(level int, format string, args ...any) {
+	if verbosity < level || quiet {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "  [v%d] %s\n", level, fmt.Sprintf(format, args...))
 }
