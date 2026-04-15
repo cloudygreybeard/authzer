@@ -5,7 +5,7 @@
 # target.
 #
 # Build:
-#   podman build -t mock-portal -f hack/demo/mock-portal/Containerfile hack/demo/mock-portal/
+#   podman build -t mock-portal -f hack/mock-portal/Containerfile hack/mock-portal/
 #
 # Run:
 #   podman run -p 8080:8080 mock-portal
