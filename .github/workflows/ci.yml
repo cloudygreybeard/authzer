@@ -22,6 +22,23 @@ jobs:
       - name: Build
         run: go build -v ./...
 
+  test-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+
+      - name: Install Chromium
+        run: sudo apt-get update && sudo apt-get install -y chromium-browser
+
+      - name: Run integration tests
+        run: go test -v -race -tags integration -timeout 120s ./...
+        env:
+          CHROME_PATH: /usr/bin/chromium-browser
+
   lint:
     runs-on: ubuntu-latest
     steps:
