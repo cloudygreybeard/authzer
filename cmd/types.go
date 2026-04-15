@@ -122,9 +122,27 @@ type Policy struct {
 // a self-contained directory with its own config, policy, scripts, and
 // cache. The registry file lives at the authzer config root.
 type ContextRegistry struct {
-	TypeMeta       `yaml:",inline"`
-	CurrentContext string         `yaml:"current-context"`
-	Contexts       []ContextEntry `yaml:"contexts"`
+	TypeMeta          `yaml:",inline"`
+	CurrentContext    string            `yaml:"current-context"`
+	Contexts          []ContextEntry    `yaml:"contexts"`
+	TrustedSources    []string          `yaml:"trustedSources,omitempty"`
+	TrustedIdentities []TrustedIdentity `yaml:"trustedIdentities,omitempty"`
+	TrustedKeys       []TrustedKey      `yaml:"trustedKeys,omitempty"`
+}
+
+// TrustedIdentity holds a sigstore OIDC identity used for keyless
+// signature verification via cosign.
+type TrustedIdentity struct {
+	Subject string `yaml:"subject"`
+	Issuer  string `yaml:"issuer,omitempty"`
+}
+
+// TrustedKey holds an SSH public key used for signature verification
+// via ssh-keygen.
+type TrustedKey struct {
+	PublicKey   string `yaml:"publicKey"`
+	Fingerprint string `yaml:"fingerprint"`
+	Comment     string `yaml:"comment,omitempty"`
 }
 
 // ContextEntry maps a context name to its directory path, relative to

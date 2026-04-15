@@ -11,7 +11,7 @@ LDFLAGS := -s -w \
 	-X github.com/cloudygreybeard/authzer/cmd.Commit=$(COMMIT) \
 	-X github.com/cloudygreybeard/authzer/cmd.Date=$(DATE)
 
-.PHONY: all build test test-integration test-all lint clean install snapshot demo-build demo-run demo help
+.PHONY: all build test test-integration test-all test-container lint clean install snapshot demo-build demo-run demo help
 
 ## all: Build the binary (default target)
 all: build
@@ -34,6 +34,11 @@ test-integration:
 
 ## test-all: Run all tests (unit + integration)
 test-all: test test-integration
+
+## test-container: Build and run all tests inside a container (Go 1.26 + Chromium)
+test-container:
+	$(CONTAINER_RT) build -f hack/Containerfile.test -t authzer-test .
+	$(CONTAINER_RT) run --rm authzer-test
 
 ## lint: Run linter
 lint:
@@ -62,7 +67,7 @@ CONTAINER_RT ?= podman
 
 ## demo-build: Build the demo containers (mock-portal, chromium, authzer-demo)
 demo-build:
-	$(CONTAINER_RT) build -t mock-portal -f hack/demo/mock-portal/Containerfile hack/demo/mock-portal/
+	$(CONTAINER_RT) build -t mock-portal -f hack/mock-portal/Containerfile hack/mock-portal/
 	$(CONTAINER_RT) build -t authzer-chromium -f hack/demo/chromium/Containerfile hack/demo/chromium/
 	$(CONTAINER_RT) build -t authzer-demo -f hack/demo/Containerfile .
 

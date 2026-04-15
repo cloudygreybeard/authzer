@@ -36,11 +36,12 @@ var (
 
 var rootCmd = &cobra.Command{
 	Use:   "authzer",
-	Short: "Config-driven web access authz management via CDP",
-	Long: `authzer automates web-based access entitlement management using
-Chrome DevTools Protocol (CDP). It connects to a running browser,
-queries membership status, and reconciles against RBAC policy by
-renewing expiring memberships or requesting new ones.
+	Short: "Declarative access management, even if the only API is a button",
+	Long: `Declarative access management, even if the only API is a button.
+
+authzer connects to a running browser via Chrome DevTools Protocol (CDP),
+queries membership status, and reconciles against RBAC policy by renewing
+expiring memberships or requesting new ones.
 
 All portal-specific details come from a YAML config file.`,
 	SilenceUsage: true,
@@ -284,9 +285,19 @@ func initConfig(cmd *cobra.Command) error {
 	return nil
 }
 
-// logFile holds a reference to the opened log file so it can be closed
-// on process exit. Nil when logging to stdout/stderr/discard.
+// logFile holds a reference to the opened audit log file so it can be
+// closed on process exit via CloseAuditLog. Nil when logging to
+// stdout/stderr/discard.
 var logFile *os.File
+
+// CloseAuditLog flushes and closes the audit log file, if one is open.
+// Call from main() via defer.
+func CloseAuditLog() {
+	if logFile != nil {
+		_ = logFile.Close()
+		logFile = nil
+	}
+}
 
 func initAuditLog() error {
 	logLevel := ParseLevel(viper.GetString("log.level"))
