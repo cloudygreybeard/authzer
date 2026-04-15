@@ -113,7 +113,7 @@ func (v *SigstoreVerifier) Verify(sourceURL string, manifest []byte) (string, er
 	if err != nil {
 		return "", fmt.Errorf("creating temp dir: %w", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	manifestFile := filepath.Join(tmpDir, "manifest.yaml")
 	bundleFile := filepath.Join(tmpDir, "manifest.sigstore.json")
@@ -181,7 +181,7 @@ func (v *SSHVerifier) Verify(sourceURL string, manifest []byte) (string, error) 
 	if err != nil {
 		return "", fmt.Errorf("creating temp dir: %w", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	sigFile := filepath.Join(tmpDir, "manifest.sig")
 	if err := os.WriteFile(sigFile, sig, 0600); err != nil {
@@ -287,7 +287,7 @@ func fetchURL(rawURL string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("fetching %s: %w", rawURL, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("fetching %s: HTTP %d", rawURL, resp.StatusCode)
 	}

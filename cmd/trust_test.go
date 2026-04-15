@@ -193,18 +193,26 @@ func TestSSHVerifier_UntrustedKey(t *testing.T) {
 
 	// Generate signing key
 	signingKey := filepath.Join(tmpDir, "signing_key")
-	exec.Command("ssh-keygen", "-t", "ed25519", "-f", signingKey, "-N", "", "-C", "signer").Run()
+	if err := exec.Command("ssh-keygen", "-t", "ed25519", "-f", signingKey, "-N", "", "-C", "signer").Run(); err != nil {
+		t.Fatalf("generating signing key: %v", err)
+	}
 
 	// Generate a different trusted key
 	trustedKey := filepath.Join(tmpDir, "trusted_key")
-	exec.Command("ssh-keygen", "-t", "ed25519", "-f", trustedKey, "-N", "", "-C", "trusted").Run()
+	if err := exec.Command("ssh-keygen", "-t", "ed25519", "-f", trustedKey, "-N", "", "-C", "trusted").Run(); err != nil {
+		t.Fatalf("generating trusted key: %v", err)
+	}
 
 	manifest := []byte("test manifest")
 	manifestFile := filepath.Join(tmpDir, "site-pack.yaml")
-	os.WriteFile(manifestFile, manifest, 0644)
+	if err := os.WriteFile(manifestFile, manifest, 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	// Sign with signing key
-	exec.Command("ssh-keygen", "-Y", "sign", "-f", signingKey, "-n", "authzer", manifestFile).Run()
+	if err := exec.Command("ssh-keygen", "-Y", "sign", "-f", signingKey, "-n", "authzer", manifestFile).Run(); err != nil {
+		t.Fatalf("signing: %v", err)
+	}
 	sigData, _ := os.ReadFile(manifestFile + ".sig")
 
 	// Trust a different key
@@ -288,7 +296,9 @@ func TestParseSSHPublicKey(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	keyFile := filepath.Join(tmpDir, "test_key")
-	exec.Command("ssh-keygen", "-t", "ed25519", "-f", keyFile, "-N", "", "-C", "test@example.com").Run()
+	if err := exec.Command("ssh-keygen", "-t", "ed25519", "-f", keyFile, "-N", "", "-C", "test@example.com").Run(); err != nil {
+		t.Fatalf("generating key: %v", err)
+	}
 
 	data, err := os.ReadFile(keyFile + ".pub")
 	if err != nil {
@@ -378,11 +388,11 @@ func TestFetchURL_NotFound(t *testing.T) {
 
 func TestTrustDomainPersistence(t *testing.T) {
 	tmp := t.TempDir()
-	origHome := os.Getenv("XDG_CONFIG_HOME")
-	os.Setenv("XDG_CONFIG_HOME", tmp)
-	defer os.Setenv("XDG_CONFIG_HOME", origHome)
+	t.Setenv("XDG_CONFIG_HOME", tmp)
 
-	os.MkdirAll(filepath.Join(tmp, "authzer"), 0755)
+	if err := os.MkdirAll(filepath.Join(tmp, "authzer"), 0755); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := addTrustedDomain("example.com"); err != nil {
 		t.Fatalf("addTrustedDomain: %v", err)
@@ -429,11 +439,11 @@ func TestTrustDomainPersistence(t *testing.T) {
 
 func TestTrustIdentityPersistence(t *testing.T) {
 	tmp := t.TempDir()
-	origHome := os.Getenv("XDG_CONFIG_HOME")
-	os.Setenv("XDG_CONFIG_HOME", tmp)
-	defer os.Setenv("XDG_CONFIG_HOME", origHome)
+	t.Setenv("XDG_CONFIG_HOME", tmp)
 
-	os.MkdirAll(filepath.Join(tmp, "authzer"), 0755)
+	if err := os.MkdirAll(filepath.Join(tmp, "authzer"), 0755); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := addTrustedIdentity("user@example.com", "https://github.com/login/oauth"); err != nil {
 		t.Fatalf("addTrustedIdentity: %v", err)
@@ -490,14 +500,16 @@ func TestTrustKeyPersistence(t *testing.T) {
 	}
 
 	tmp := t.TempDir()
-	origHome := os.Getenv("XDG_CONFIG_HOME")
-	os.Setenv("XDG_CONFIG_HOME", tmp)
-	defer os.Setenv("XDG_CONFIG_HOME", origHome)
+	t.Setenv("XDG_CONFIG_HOME", tmp)
 
-	os.MkdirAll(filepath.Join(tmp, "authzer"), 0755)
+	if err := os.MkdirAll(filepath.Join(tmp, "authzer"), 0755); err != nil {
+		t.Fatal(err)
+	}
 
 	keyFile := filepath.Join(tmp, "test_key")
-	exec.Command("ssh-keygen", "-t", "ed25519", "-f", keyFile, "-N", "", "-C", "test-key").Run()
+	if err := exec.Command("ssh-keygen", "-t", "ed25519", "-f", keyFile, "-N", "", "-C", "test-key").Run(); err != nil {
+		t.Fatalf("generating key: %v", err)
+	}
 
 	if err := addTrustedKeyFromFile(keyFile + ".pub"); err != nil {
 		t.Fatalf("addTrustedKeyFromFile: %v", err)
@@ -537,7 +549,9 @@ func TestTrustKeyPersistence(t *testing.T) {
 	}
 
 	// Re-add, then remove by comment
-	addTrustedKeyFromFile(keyFile + ".pub")
+	if err := addTrustedKeyFromFile(keyFile + ".pub"); err != nil {
+		t.Fatalf("re-adding key: %v", err)
+	}
 	if err := removeTrustedKey("test-key"); err != nil {
 		t.Fatalf("removeTrustedKey by comment: %v", err)
 	}
