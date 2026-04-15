@@ -1,3 +1,3 @@
-module github.com/cloudygreybeard/authzer/hack/demo/mock-portal
+module github.com/cloudygreybeard/authzer/hack/mock-portal
 
 go 1.23

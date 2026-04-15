@@ -30,7 +30,9 @@ import (
 
 func main() {
 	addr := ":8080"
-	if v := os.Getenv("MOCK_PORTAL_ADDR"); v != "" {
+	if len(os.Args) > 1 {
+		addr = os.Args[1]
+	} else if v := os.Getenv("MOCK_PORTAL_ADDR"); v != "" {
 		addr = v
 	}
 
