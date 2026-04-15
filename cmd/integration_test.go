@@ -18,6 +18,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -34,13 +35,15 @@ import (
 )
 
 var (
-	mockServerURL string
-	cdpWSURL      string
-	chromeCmd     *exec.Cmd
+	mockServerURL    string
+	mockPortalURL    string
+	cdpWSURL         string
+	chromeCmd        *exec.Cmd
+	mockPortalCmd    *exec.Cmd
 )
 
 func TestMain(m *testing.M) {
-	// Start HTTP server for mock portal.
+	// Start HTTP file server for testdata mock portal (detail-page tests).
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to start listener: %v\n", err)
@@ -52,11 +55,20 @@ func TestMain(m *testing.M) {
 	server := &http.Server{Handler: http.FileServer(http.Dir(mockDir))}
 	go func() { _ = server.Serve(listener) }()
 
+	// Build and start the full mock portal (memberships-flow tests).
+	mockPortalURL, mockPortalCmd, err = startMockPortal()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "mock-portal: %v\n", err)
+		_ = server.Close()
+		os.Exit(1)
+	}
+
 	// Find Chrome.
 	chromePath := findChrome()
 	if chromePath == "" {
 		fmt.Fprintln(os.Stderr, "Chrome/Chromium not found, skipping integration tests")
 		_ = server.Close()
+		stopMockPortal()
 		os.Exit(0)
 	}
 
@@ -115,6 +127,7 @@ func TestMain(m *testing.M) {
 
 	// Cleanup.
 	_ = server.Close()
+	stopMockPortal()
 	if chromeCmd.Process != nil {
 		_ = chromeCmd.Process.Kill()
 		_ = chromeCmd.Wait()
@@ -122,6 +135,61 @@ func TestMain(m *testing.M) {
 	_ = os.RemoveAll(userDataDir)
 
 	os.Exit(code)
+}
+
+// startMockPortal builds the demo mock-portal binary, starts it on a
+// random port, and waits until it is ready to accept connections.
+func startMockPortal() (string, *exec.Cmd, error) {
+	portalSrc := filepath.Join("..", "hack", "mock-portal")
+	binDir, err := os.MkdirTemp("", "authzer-mock-portal-*")
+	if err != nil {
+		return "", nil, fmt.Errorf("mktemp: %w", err)
+	}
+	binPath := filepath.Join(binDir, "mock-portal")
+
+	build := exec.Command("go", "build", "-o", binPath, ".")
+	build.Dir = portalSrc
+	if out, err := build.CombinedOutput(); err != nil {
+		return "", nil, fmt.Errorf("go build mock-portal: %v\n%s", err, out)
+	}
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return "", nil, err
+	}
+	addr := ln.Addr().String()
+	_ = ln.Close()
+
+	cmd := exec.Command(binPath, addr)
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		return "", nil, fmt.Errorf("start mock-portal: %w", err)
+	}
+
+	portalURL := fmt.Sprintf("http://%s", addr)
+	ready := false
+	for i := 0; i < 30; i++ {
+		resp, err := http.Get(portalURL + "/portal/memberships")
+		if err == nil {
+			_ = resp.Body.Close()
+			ready = true
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if !ready {
+		_ = cmd.Process.Kill()
+		return "", nil, fmt.Errorf("mock-portal not ready on %s after 6s", addr)
+	}
+
+	return portalURL, cmd, nil
+}
+
+func stopMockPortal() {
+	if mockPortalCmd != nil && mockPortalCmd.Process != nil {
+		_ = mockPortalCmd.Process.Kill()
+		_ = mockPortalCmd.Wait()
+	}
 }
 
 func findChrome() string {
@@ -570,5 +638,207 @@ func TestCheckTerms_MockPortal(t *testing.T) {
 	}
 	if checked != "true" {
 		t.Errorf("terms checkbox aria-checked = %q, want %q", checked, "true")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Memberships-flow tests (using the full Go mock-portal)
+// ---------------------------------------------------------------------------
+
+// setupViperForMemberships configures viper with the demo config scripts
+// and portal settings that match the Go mock-portal's DOM structure.
+func setupViperForMemberships(t *testing.T) {
+	t.Helper()
+	viper.Reset()
+
+	viper.Set("portal.name", "Demo Portal")
+	viper.Set("portal.page.readySelector", "h1")
+	viper.Set("portal.dialog.triggerText", "Request Membership")
+	viper.Set("portal.dialog.triggerSelector", `button, a, [role="button"], [role="link"]`)
+	viper.Set("portal.dialog.readySelector", `[role="dialog"]`)
+	viper.Set("portal.dialog.optionText", "This Account")
+	viper.Set("portal.dialog.closeTexts", []string{"Cancel", "Close"})
+	viper.Set("portal.dialog.closeAriaLabels", []string{"Close"})
+	viper.Set("portal.dialog.submitTexts", []string{"Submit", "Renew"})
+	viper.Set("portal.form.roleExcludePatterns", []string{"INSTRUCTIONS"})
+
+	viper.Set("portal.memberships.url", mockPortalURL+"/portal/memberships")
+	viper.Set("portal.memberships.tableReadySelector", "tbody[role='rowgroup'] tr[role='row']")
+	viper.Set("portal.memberships.renewButtonText", "Renew")
+	viper.Set("portal.memberships.dialogReadySelector", `[role="dialog"]`)
+
+	viper.Set("portal.form.readySelectors", []string{
+		`[role="combobox"]`,
+		`input[type="radio"]`,
+		`[role="radio"]`,
+		`textarea`,
+		`[role="checkbox"]`,
+		`input[type="checkbox"]`,
+	})
+
+	scriptDir := filepath.Join("..", "hack", "demo", "config", "scripts")
+	scriptNames := []struct {
+		file string
+		key  string
+	}{
+		{"page-info.js", "portal.page.infoJs"},
+		{"form-info.js", "portal.form.infoJs"},
+		{"find-button.js", "portal.findButtonJs"},
+		{"form-ready.js", "portal.formReadyJs"},
+		{"find-close.js", "portal.findCloseJs"},
+		{"select-permission.js", "portal.form.selectPermissionJs"},
+		{"fill-justification.js", "portal.form.fillJustificationJs"},
+		{"check-terms.js", "portal.form.checkTermsJs"},
+		{"memberships-select.js", "portal.memberships.selectJs"},
+		{"memberships-list.js", "portal.memberships.listJs"},
+	}
+	for _, s := range scriptNames {
+		data, err := os.ReadFile(filepath.Join(scriptDir, s.file))
+		if err != nil {
+			t.Fatalf("reading %s: %v", s.file, err)
+		}
+		viper.Set(s.key, strings.TrimSpace(string(data)))
+	}
+}
+
+func TestSurveyMemberships_MockPortal(t *testing.T) {
+	setupViperForMemberships(t)
+
+	ctx := context.Background()
+	browserCtx, cancel := connectBrowser(ctx, cdpWSURL)
+	defer cancel()
+
+	tabCtx, tabCancel := newTab(browserCtx)
+	defer tabCancel()
+
+	membershipsURL := mockPortalURL + "/portal/memberships"
+	if err := chromedp.Run(tabCtx,
+		chromedp.Navigate(membershipsURL),
+		chromedp.WaitVisible("tbody[role='rowgroup'] tr[role='row']", chromedp.ByQuery),
+	); err != nil {
+		t.Fatalf("navigate to memberships: %v", err)
+	}
+
+	listJS := viper.GetString("portal.memberships.listJs")
+	var jsonStr string
+	if err := chromedp.Run(tabCtx, chromedp.Evaluate(listJS, &jsonStr)); err != nil {
+		t.Fatalf("listJs: %v", err)
+	}
+
+	var items []map[string]any
+	if err := json.Unmarshal([]byte(jsonStr), &items); err != nil {
+		t.Fatalf("unmarshal memberships list: %v", err)
+	}
+
+	if len(items) != 6 {
+		t.Fatalf("expected 6 memberships, got %d", len(items))
+	}
+
+	first := items[0]
+	if first["name"] != "Cloud Storage Access" {
+		t.Errorf("first item name = %q, want Cloud Storage Access", first["name"])
+	}
+	if first["id"] != "cloud-storage-a1b2" {
+		t.Errorf("first item id = %q, want cloud-storage-a1b2", first["id"])
+	}
+	if first["role"] != "ReadOnly" {
+		t.Errorf("first item role = %q, want ReadOnly", first["role"])
+	}
+
+	hasExpiring := false
+	for _, item := range items {
+		if item["expiring"] == true {
+			hasExpiring = true
+			break
+		}
+	}
+	if !hasExpiring {
+		t.Error("expected at least one expiring membership")
+	}
+}
+
+func TestSurveyDetail_MockPortal(t *testing.T) {
+	setupViperForMemberships(t)
+
+	ctx := context.Background()
+	browserCtx, cancel := connectBrowser(ctx, cdpWSURL)
+	defer cancel()
+
+	detailURL := mockPortalURL + "/portal/access/cloud-storage-a1b2"
+	opts := surveyOpts{
+		SettleDelay: 500 * time.Millisecond,
+		Timeout:     30 * time.Second,
+	}
+
+	res := surveyResource(browserCtx, detailURL, "Entitlement", opts)
+
+	if res.Error != "" {
+		t.Fatalf("surveyResource error: %s", res.Error)
+	}
+	if res.Name != "Cloud Storage Access" {
+		t.Errorf("Name = %q, want Cloud Storage Access", res.Name)
+	}
+	if res.Status != "Active" {
+		t.Errorf("Status = %q, want Active", res.Status)
+	}
+	if res.RequestForm == nil {
+		t.Fatal("RequestForm is nil")
+	}
+	if res.RequestForm.Account != "demo/user" {
+		t.Errorf("Account = %q, want demo/user", res.RequestForm.Account)
+	}
+	if len(res.RequestForm.Permissions) < 2 {
+		t.Fatalf("expected at least 2 permissions, got %d", len(res.RequestForm.Permissions))
+	}
+}
+
+func TestRenewMembership_MockPortal(t *testing.T) {
+	setupViperForMemberships(t)
+
+	ctx := context.Background()
+	browserCtx, cancel := connectBrowser(ctx, cdpWSURL)
+	defer cancel()
+
+	opts := renewOpts{
+		SettleDelay:   1 * time.Second,
+		Timeout:       30 * time.Second,
+		Permission:    "ReadOnly",
+		Justification: "Integration test: renew via memberships page",
+		DryRun:        DryRunServer,
+	}
+
+	res := renewMembership(browserCtx, "Cloud Storage Access", opts)
+
+	if res.Error != "" {
+		t.Fatalf("renewMembership error: %s", res.Error)
+	}
+	if res.Name != "Cloud Storage Access" {
+		t.Errorf("Name = %q, want Cloud Storage Access", res.Name)
+	}
+}
+
+func TestRenewMembership_FullSubmit(t *testing.T) {
+	setupViperForMemberships(t)
+
+	ctx := context.Background()
+	browserCtx, cancel := connectBrowser(ctx, cdpWSURL)
+	defer cancel()
+
+	opts := renewOpts{
+		SettleDelay:   1 * time.Second,
+		Timeout:       30 * time.Second,
+		Permission:    "ReadWrite",
+		Justification: "Integration test: full submit flow",
+		DryRun:        DryRunNone,
+		AcceptTerms:   true,
+	}
+
+	res := renewMembership(browserCtx, "API Gateway Admin", opts)
+
+	if res.Error != "" {
+		t.Fatalf("renewMembership error: %s", res.Error)
+	}
+	if res.Name != "API Gateway Admin" {
+		t.Errorf("Name = %q, want API Gateway Admin", res.Name)
 	}
 }

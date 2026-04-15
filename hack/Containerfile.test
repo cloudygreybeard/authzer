@@ -1,0 +1,25 @@
+# Containerfile.test: builds and runs all tests (unit + integration) inside
+# a container with the correct Go version and headless Chromium.
+#
+# Build & run (from authzer/):
+#   podman build -f hack/Containerfile.test -t authzer-test .
+#   podman run --rm authzer-test
+
+FROM golang:1.26-bookworm
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    chromium \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV CHROME_PATH=/usr/bin/chromium
+
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY hack/mock-portal/go.mod /src/hack/mock-portal/go.mod
+RUN cd /src/hack/mock-portal && go mod download
+
+COPY . .
+
+CMD ["go", "test", "-v", "-race", "-tags", "integration", "-timeout", "120s", "./..."]

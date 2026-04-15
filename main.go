@@ -28,6 +28,7 @@ import (
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	defer cmd.CloseAuditLog()
 
 	if err := cmd.Execute(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, err)
