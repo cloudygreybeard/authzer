@@ -296,17 +296,21 @@ func verifySource(sourceURL string, manifest []byte, reg *ContextRegistry) (stri
 // fetchURL retrieves the content at the given URL. It supports two
 // URL styles:
 //
-//   - Git repository URLs, fetched via shallow git clone. Auth is
-//     delegated to the configured git credential helper (gh, GCM,
-//     netrc, etc.) -- the same mechanism used by Go modules and
-//     kustomize. The repo/path boundary is detected automatically
-//     for known forges (github.com, gitlab.com, bitbucket.org, etc.)
-//     or via an explicit "//" separator for self-hosted instances.
+//   - Git repository file URLs, fetched via shallow git clone. Auth
+//     is delegated to the configured git credential helper (GCM, gh,
+//     netrc, keychain, etc.). The repo/path boundary is detected
+//     automatically for known forges (github.com, gitlab.com,
+//     bitbucket.org, codeberg.org, sr.ht) or via an explicit "//"
+//     separator for self-hosted instances. Append ?ref=TAG to pin
+//     to a tag or branch (defaults to HEAD).
 //
 //     https://github.com/OWNER/REPO/path/to/file?ref=v1
 //     https://git.example.com/group/repo//path/to/file?ref=v1
 //
-//   - Plain HTTPS URLs, fetched with a standard HTTP GET.
+//   - Plain HTTPS URLs, fetched with a standard HTTP GET (no auth).
+//
+// Release asset URLs (e.g. /releases/download/...) are not supported;
+// site-pack files must live in the repository tree.
 func fetchURL(rawURL string) ([]byte, error) {
 	if repoURL, filePath, ref, ok := parseGitFileURL(rawURL); ok {
 		logV(1, "fetching %s from git repo %s@%s", filePath, repoURL, ref)
@@ -827,16 +831,19 @@ var trustAddKeyCmd = &cobra.Command{
 	Long: `Add an SSH public key to the trusted list. Remote manifests signed
 with the corresponding private key will be accepted.
 
-The argument can be a local file path or an HTTPS URL. For private
-GitHub repositories, the gh CLI token is used automatically if
-available.
+The argument can be a local file path or an HTTPS URL pointing to a
+file inside a git repository. For known forge hosts (GitHub, GitLab,
+Bitbucket, etc.) the repository boundary is detected automatically.
+Auth is handled by the configured git credential helper (GCM, gh,
+netrc, keychain, etc.).
 
 Publisher signing workflow:
   ssh-keygen -Y sign -f ~/.ssh/id_ed25519 -n authzer site-pack.yaml
 
 Examples:
   authzer config trust add-key ~/.ssh/id_ed25519.pub
-  authzer config trust add-key https://github.com/ORG/REPO/releases/latest/download/signing-key.pub`,
+  authzer config trust add-key https://github.com/ORG/REPO/signing-key.pub
+  authzer config trust add-key https://github.com/ORG/REPO/signing-key.pub?ref=v1`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(_ *cobra.Command, args []string) error {
 		if err := addTrustedKeyFromFile(args[0]); err != nil {
