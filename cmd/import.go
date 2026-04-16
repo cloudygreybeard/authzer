@@ -42,15 +42,24 @@ When --values is not provided, the command prompts interactively for
 each value defined in the manifest. Supplied values are saved to the
 context directory for future re-imports.
 
-The -f flag accepts a local file path or an HTTPS URL. Remote sources
-must be in the trusted sources list (see "authzer config trust") unless
---insecure-skip-source-verify is set. Remote content is fetched once at
-import time; runtime script loading is always local.
+The -f flag accepts a local file path or an HTTPS URL. URLs pointing
+into a git repository on a known forge (GitHub, GitLab, Bitbucket,
+etc.) are fetched via shallow git clone, with auth handled by the
+configured credential helper (GCM, gh, netrc, keychain, etc.). Pin
+to a tag or branch with ?ref=TAG. For self-hosted forges, use the
+// separator (e.g. https://git.example.com/group/repo//path/file).
+Plain HTTPS URLs are fetched via HTTP GET (no auth).
+
+Remote sources must be in the trusted sources list (see
+"authzer config trust") unless --insecure-skip-source-verify is set.
+Remote content is fetched once at import time; runtime script loading
+is always local.
 
 Example:
 
   authzer config import -f site-pack.yaml
-  authzer config import -f https://example.com/site-pack.yaml
+  authzer config import -f https://github.com/ORG/REPO/path/site-pack.yaml
+  authzer config import -f https://github.com/ORG/REPO/path/site-pack.yaml?ref=v1
   authzer config import -f site-pack.yaml --values values.yaml
   authzer config import -f site-pack.yaml --context staging`,
 	RunE: runImport,

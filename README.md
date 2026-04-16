@@ -120,18 +120,23 @@ authzer doctor
 authzer config import -f site-pack.yaml
 authzer config import -f site-pack.yaml --values values.yaml
 
-# Import from a remote URL (requires trusted source)
-authzer config import -f https://example.com/site-pack.yaml
+# Import from a git repository (auth via credential helper)
+authzer config import -f https://github.com/ORG/REPO/path/site-pack.yaml
+authzer config import -f https://github.com/ORG/REPO/path/site-pack.yaml?ref=v1
+authzer config import -f https://github.com/ORG/REPO/path/site-pack.yaml \
+  --values https://github.com/ORG/REPO/path/values.yaml
 
 # Context management
 authzer config list
 authzer config current
 authzer config use staging
+authzer config view
+authzer config policy
 
 # Trust management for remote imports
 authzer config trust add example.com
 authzer config trust add-identity user@example.com --issuer https://github.com/login/oauth
-authzer config trust add-key ~/.ssh/id_ed25519.pub
+authzer config trust add-key https://github.com/ORG/REPO/signing-key.pub
 authzer config trust list
 
 # Override context for a single command
@@ -385,6 +390,49 @@ portal:
 
 At runtime, `authzer` resolves `@`-prefixed values to file paths relative to
 the config file location.
+
+### Remote URL handling
+
+`authzer config import -f` and `authzer config trust add-key` accept HTTPS
+URLs. Two URL styles are supported:
+
+**Git repository file URLs** (recommended for private repos). For known
+forge hosts (GitHub, GitLab, Bitbucket, Codeberg, sr.ht), the repository
+boundary is inferred from the URL structure. Files are fetched via shallow
+`git clone`, with auth delegated to the configured credential helper
+(GCM, `gh auth setup-git`, netrc, keychain, etc.):
+
+```bash
+authzer config import -f https://github.com/ORG/REPO/path/site-pack.yaml
+```
+
+Append `?ref=TAG` to pin to a tag or branch (defaults to HEAD):
+
+```bash
+authzer config import -f https://github.com/ORG/REPO/path/site-pack.yaml?ref=v1
+```
+
+For self-hosted forges, use the `//` separator or include `.git` in the
+URL to mark the repository boundary:
+
+```bash
+authzer config import -f https://git.example.com/group/repo//path/site-pack.yaml
+authzer config import -f https://git.example.com/group/repo.git/path/site-pack.yaml
+```
+
+The `--values` flag also accepts URLs, using the same resolution rules:
+
+```bash
+authzer config import \
+  -f https://github.com/ORG/REPO/path/site-pack.yaml?ref=v1 \
+  --values https://github.com/ORG/REPO/path/values.yaml?ref=v1
+```
+
+**Plain HTTPS URLs** (public URLs only). Fetched via HTTP GET with no
+authentication.
+
+Release asset URLs (e.g. `/releases/download/...`) are not supported.
+Site-pack files should live in the repository tree.
 
 ### Trust and verification
 
