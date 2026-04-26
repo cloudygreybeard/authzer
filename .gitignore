@@ -1,8 +1,5 @@
-# Binary (name will match project)
-/authzer
-*.exe
-
-# Build artifacts
+# Build output
+/bin/
 dist/
 hack/mock-portal/mock-portal
 
