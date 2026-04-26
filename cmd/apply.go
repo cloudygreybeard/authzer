@@ -422,7 +422,10 @@ func runApply(cmd *cobra.Command, args []string) error {
 					n, totalActions, it.action, label, res.Error)
 			}
 			auditLog.Error("apply."+it.action+".fail", act)
+			resultsMu.Lock()
 			failed++
+			results = append(results, act)
+			resultsMu.Unlock()
 		} else {
 			switch mode {
 			case DryRunServer:
@@ -443,12 +446,11 @@ func runApply(cmd *cobra.Command, args []string) error {
 					n, totalActions, it.action, label)
 				auditLog.Info("apply."+it.action+".ok", act)
 			}
+			resultsMu.Lock()
 			succeeded++
+			results = append(results, act)
+			resultsMu.Unlock()
 		}
-
-		resultsMu.Lock()
-		results = append(results, act)
-		resultsMu.Unlock()
 	}
 
 	{
