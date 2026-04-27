@@ -261,18 +261,25 @@ func newTab(browserCtx context.Context) (context.Context, context.CancelFunc) {
 func dispatchClick(ctx context.Context, x, y float64) error {
 	js := fmt.Sprintf(`(() => {
 		const el = document.elementFromPoint(%v, %v);
-		if (!el) return 'no element';
+		if (!el) return JSON.stringify({err: 'no element'});
 		el.click();
-		return '';
+		return JSON.stringify({tag: el.tagName.toLowerCase(),
+			text: (el.textContent || '').trim().substring(0, 80),
+			cls: (el.className || '').substring(0, 120)});
 	})()`, x, y)
 
-	var errMsg string
-	if err := chromedp.Run(ctx, chromedp.Evaluate(js, &errMsg)); err != nil {
+	var raw string
+	if err := chromedp.Run(ctx, chromedp.Evaluate(js, &raw)); err != nil {
 		return fmt.Errorf("dispatchClick(%v,%v): %w", x, y, err)
 	}
-	if errMsg != "" {
-		return fmt.Errorf("dispatchClick(%v,%v): %s", x, y, errMsg)
+	var info map[string]string
+	if err := json.Unmarshal([]byte(raw), &info); err != nil {
+		return fmt.Errorf("dispatchClick(%v,%v) unmarshal: %w", x, y, err)
 	}
+	if msg, ok := info["err"]; ok {
+		return fmt.Errorf("dispatchClick(%v,%v): %s", x, y, msg)
+	}
+	logV(4, "dispatchClick(%v,%v): <%s> text=%q class=%q", x, y, info["tag"], info["text"], info["cls"])
 	return nil
 }
 
@@ -731,13 +738,25 @@ func renewMembership(ctx context.Context, name string, opts renewOpts) Resource 
 	}
 
 	if opts.DryRun == DryRunNone {
-		logf("clicking renew submit")
-		submitCoords, err := findButton(tabCtx, renewButtonText)
-		if err != nil {
-			res.Error = fmt.Sprintf("renew submit button not found: %v", err)
+		submitTexts := viper.GetStringSlice("portal.dialog.submitTexts")
+		if len(submitTexts) == 0 {
+			submitTexts = []string{renewButtonText}
+		}
+		var submitCoords Coords
+		var submitErr error
+		for _, text := range submitTexts {
+			logf("looking for submit button %q", text)
+			submitCoords, submitErr = findButton(tabCtx, text)
+			if submitErr == nil {
+				break
+			}
+		}
+		if submitErr != nil {
+			res.Error = fmt.Sprintf("renew submit button not found: %v", submitErr)
 			tabCancel()
 			return res
 		}
+		logf("clicking renew submit")
 		if err := dispatchClick(tabCtx, submitCoords.X, submitCoords.Y); err != nil {
 			res.Error = fmt.Sprintf("renew submit click: %v", err)
 			tabCancel()
