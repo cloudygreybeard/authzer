@@ -587,6 +587,7 @@ func renewResource(ctx context.Context, url string, kind string, opts renewOpts)
 //
 // In server dry-run mode, tabs are left open on both success and failure
 // so the user can inspect the portal state.
+//nolint:unused // used by integration_test.go (build-tagged)
 func renewMembership(ctx context.Context, name string, opts renewOpts) Resource {
 	res := Resource{Name: name}
 	logf := func(format string, args ...any) {

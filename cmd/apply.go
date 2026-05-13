@@ -325,13 +325,14 @@ func runApply(cmd *cobra.Command, args []string) error {
 	sem := make(chan struct{}, concurrency)
 	var wg sync.WaitGroup
 
+applyLoop:
 	for _, item := range actionable {
 		select {
 		case sem <- struct{}{}:
 		case <-ctx.Done():
 			logHuman("\nAborted.\n")
 			auditLog.Warn("apply.aborted", map[string]any{"phase": item.Action})
-			break
+			break applyLoop
 		}
 
 		wg.Add(1)

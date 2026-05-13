@@ -200,7 +200,7 @@ func TestAPIProviderList(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(memberships)
+		_ = json.NewEncoder(w).Encode(memberships)
 	}))
 	defer srv.Close()
 
@@ -231,7 +231,7 @@ func TestAPIProviderListCaching(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode([]map[string]interface{}{
+		_ = json.NewEncoder(w).Encode([]map[string]interface{}{
 			{"EntitlementName": "ent-1", "EntitlementDisplayName": "E1", "PermissionName": "Read"},
 		})
 	}))
@@ -262,7 +262,7 @@ func TestAPIProviderListCaching(t *testing.T) {
 func TestAPIProviderCheck(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode([]map[string]interface{}{
+		_ = json.NewEncoder(w).Encode([]map[string]interface{}{
 			{"EntitlementName": "ent-a", "EntitlementDisplayName": "Entitlement A", "PermissionName": "Read"},
 			{"EntitlementName": "ent-b", "EntitlementDisplayName": "Entitlement B", "PermissionName": "Write"},
 		})
@@ -346,7 +346,7 @@ func TestAPIProviderApplySubmit(t *testing.T) {
 			})
 		case "/api/Entitlement/modify":
 			body, _ := io.ReadAll(r.Body)
-			json.Unmarshal(body, &submittedBody)
+			_ = json.Unmarshal(body, &submittedBody)
 			w.WriteHeader(200)
 		default:
 			http.NotFound(w, r)

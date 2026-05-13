@@ -216,7 +216,7 @@ func (p *APIProvider) doRequestHTTP(ctx context.Context, ep APIEndpoint, body st
 	if err != nil {
 		return nil, 0, fmt.Errorf("request %s %s: %w", ep.Method, ep.Path, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
