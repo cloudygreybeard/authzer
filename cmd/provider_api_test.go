@@ -298,7 +298,7 @@ func TestAPIProviderApplyDryRun(t *testing.T) {
 		case "/api/Entitlement/validate/members":
 			validateCalled = true
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"ValidMembers":   []interface{}{map[string]interface{}{"Name": "testuser", "IsRenewal": true}},
 				"InvalidMembers": []interface{}{},
 				"Errors":         []interface{}{},
@@ -339,7 +339,7 @@ func TestAPIProviderApplySubmit(t *testing.T) {
 		switch r.URL.Path {
 		case "/api/Entitlement/validate/members":
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"ValidMembers":   []interface{}{map[string]interface{}{"Name": "testuser"}},
 				"InvalidMembers": []interface{}{},
 				"Errors":         []interface{}{},
@@ -381,7 +381,7 @@ func TestAPIProviderApplyValidationFailure(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/Entitlement/validate/members" {
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"ValidMembers":   []interface{}{},
 				"InvalidMembers": []interface{}{map[string]interface{}{"Name": "testuser", "Reason": "blocked"}},
 				"Errors":         []interface{}{},
@@ -429,7 +429,7 @@ func TestAPIProviderKindsAndCapabilities(t *testing.T) {
 func TestAPIProviderListAssignments(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode([]map[string]interface{}{
+		_ = json.NewEncoder(w).Encode([]map[string]interface{}{
 			{
 				"EntitlementName":        "ent-x",
 				"EntitlementDisplayName": "Entitlement X",
