@@ -228,20 +228,23 @@ type FormOption struct {
 }
 
 // ---------------------------------------------------------------------------
-// Membership data from the My Memberships table
+// Assignment — unified access grant representation
 // ---------------------------------------------------------------------------
 
-// Membership represents a current membership scraped from the portal's
-// memberships table. This is the lightweight data returned by "get".
-type Membership struct {
+// Assignment is the canonical representation of an access grant across
+// all provider backends (CDP, API, Entra, Azure RBAC). It unifies the
+// former Membership (CDP/portal) and Assignment (provider framework)
+// types into a single type used for listing, reconciliation, and output.
+type Assignment struct {
 	Kind           string `yaml:"kind,omitempty" json:"kind,omitempty"`
 	ID             string `yaml:"id" json:"id"`
 	Name           string `yaml:"name" json:"name"`
 	SelfLink       string `yaml:"selfLink,omitempty" json:"selfLink,omitempty"`
-	Account        string `yaml:"account" json:"account"`
-	Role           string `yaml:"role" json:"role"`
-	ExpirationDate string `yaml:"expirationDate" json:"expirationDate"`
-	Expiring       bool   `yaml:"expiring" json:"expiring"`
+	Account        string `yaml:"account,omitempty" json:"account,omitempty"`
+	Role           string `yaml:"role,omitempty" json:"role,omitempty"`
+	ExpirationDate string `yaml:"expirationDate,omitempty" json:"expirationDate,omitempty"`
+	Expiring       bool   `yaml:"expiring,omitempty" json:"expiring,omitempty"`
+	State          string `yaml:"state,omitempty" json:"state,omitempty"`
 }
 
 // ---------------------------------------------------------------------------
@@ -249,13 +252,13 @@ type Membership struct {
 // ---------------------------------------------------------------------------
 
 // GetData is the data payload for the "get" command. It combines
-// lightweight membership data with optional deep resource metadata
+// lightweight assignment data with optional deep resource metadata
 // loaded from cache.
 type GetData struct {
 	Updated     string       `yaml:"updated" json:"updated"`
 	CDPEndpoint string       `yaml:"cdpEndpoint" json:"cdpEndpoint"`
 	TotalItems  int          `yaml:"totalItems" json:"totalItems"`
-	Items       []Membership `yaml:"items" json:"items"`
+	Items       []Assignment `yaml:"items" json:"items"`
 	Details     []Resource   `yaml:"details,omitempty" json:"details,omitempty"`
 }
 
@@ -270,13 +273,13 @@ type InspectData struct {
 
 // ApplyData is the data payload for the "apply" command output.
 type ApplyData struct {
-	Updated       string      `yaml:"updated" json:"updated"`
-	Group         string      `yaml:"group" json:"group"`
-	Justification string      `yaml:"justification" json:"justification"`
-	DryRun        string      `yaml:"dryRun" json:"dryRun"`
-	TotalItems    int         `yaml:"totalItems" json:"totalItems"`
+	Updated       string       `yaml:"updated" json:"updated"`
+	Group         string       `yaml:"group" json:"group"`
+	Justification string       `yaml:"justification" json:"justification"`
+	DryRun        string       `yaml:"dryRun" json:"dryRun"`
+	TotalItems    int          `yaml:"totalItems" json:"totalItems"`
 	Summary       ApplySummary `yaml:"summary" json:"summary"`
-	Items         []Action    `yaml:"items" json:"items"`
+	Items         []Action     `yaml:"items" json:"items"`
 }
 
 // ApplySummary counts actions by type.
@@ -298,4 +301,53 @@ type Action struct {
 	CurrentRole string `yaml:"currentRole,omitempty" json:"currentRole,omitempty"`
 	DesiredRole string `yaml:"desiredRole" json:"desiredRole"`
 	Error       string `yaml:"error,omitempty" json:"error,omitempty"`
+}
+
+// ---------------------------------------------------------------------------
+// API backend definition — portal-agnostic HTTP API provider config
+// ---------------------------------------------------------------------------
+
+// APIBackend defines a set of HTTP API endpoints that a site-pack can
+// provide as an alternative to CDP scraping. All portal-specific
+// details (URLs, request shapes, field names) live in this document;
+// the authzer binary only knows the generic schema.
+type APIBackend struct {
+	TypeMeta `yaml:",inline"`
+	Metadata ObjectMeta     `yaml:"metadata"`
+	Spec     APIBackendSpec `yaml:"spec"`
+}
+
+// APIBackendSpec holds the API connection, identity, and endpoint
+// definitions for a single portal backend.
+type APIBackendSpec struct {
+	BaseURL   string            `yaml:"baseURL"`
+	Auth      APIAuth           `yaml:"auth"`
+	Identity  map[string]string `yaml:"identity"`
+	Endpoints APIEndpoints      `yaml:"endpoints"`
+}
+
+// APIAuth describes how the API provider authenticates requests.
+// Currently only "browser-cookies" is supported: cookies are extracted
+// from a running browser via CDP and attached to outgoing HTTP calls.
+type APIAuth struct {
+	Method    string `yaml:"method"`
+	CookieURL string `yaml:"cookieURL,omitempty"`
+}
+
+// APIEndpoints groups the HTTP endpoints used by the API provider.
+// Each endpoint is optional except List and Submit.
+type APIEndpoints struct {
+	List        APIEndpoint `yaml:"list"`
+	CheckStatus APIEndpoint `yaml:"checkStatus,omitempty"`
+	Validate    APIEndpoint `yaml:"validate,omitempty"`
+	Submit      APIEndpoint `yaml:"submit"`
+}
+
+// APIEndpoint describes a single HTTP endpoint with a Go-template
+// request body and an optional field mapping for response parsing.
+type APIEndpoint struct {
+	Method       string            `yaml:"method"`
+	Path         string            `yaml:"path"`
+	BodyTemplate string            `yaml:"bodyTemplate,omitempty"`
+	FieldMap     map[string]string `yaml:"fieldMap,omitempty"`
 }

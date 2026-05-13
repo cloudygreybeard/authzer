@@ -53,11 +53,11 @@ func runDescribe(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("no cached resource details; run 'authzer get --refresh' first")
 	}
 
-	var memberships []Membership
+	var memberships []Assignment
 	if data, err := os.ReadFile(membershipsPath); err == nil {
 		_ = yaml.Unmarshal(data, &memberships)
 	}
-	membershipByID := make(map[string]*Membership, len(memberships))
+	membershipByID := make(map[string]*Assignment, len(memberships))
 	for i := range memberships {
 		membershipByID[memberships[i].ID] = &memberships[i]
 	}
@@ -94,7 +94,7 @@ func filterDetails(details []Resource, args []string) []Resource {
 	return out
 }
 
-func printResource(w io.Writer, r Resource, m *Membership) {
+func printResource(w io.Writer, r Resource, m *Assignment) {
 	field := func(label, value string) {
 		if value != "" {
 			_, _ = fmt.Fprintf(w, "%-20s%s\n", label+":", value)
