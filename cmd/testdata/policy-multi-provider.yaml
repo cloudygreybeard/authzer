@@ -1,0 +1,101 @@
+# Example policy demonstrating multi-provider rules.
+#
+# This policy declares three kinds of access:
+#   - Entitlement:          portal-managed (CDP provider)
+#   - EntraGroup:           Entra ID group membership (az CLI provider)
+#   - AzureRoleAssignment:  Azure RBAC role (az CLI provider)
+---
+apiVersion: authzer/v1alpha1
+kind: Role
+metadata:
+  name: platform-sre-portal
+  labels:
+    team: platform-sre
+    provider: cdp
+  annotations:
+    description: Portal entitlements for platform SRE
+rules:
+  - kind: Entitlement
+    resource: log-analytics-rw
+    selfLink: https://access.example.com/manage/Entitlement/entitlement/log-analytics-rw
+    permission: Reader
+  - kind: Entitlement
+    resource: monitoring-ro
+    selfLink: https://access.example.com/manage/Entitlement/entitlement/monitoring-ro
+    permission: Reader
+---
+apiVersion: authzer/v1alpha1
+kind: Role
+metadata:
+  name: platform-sre-entra
+  labels:
+    team: platform-sre
+    provider: entra
+  annotations:
+    description: Entra ID security groups for platform SRE
+rules:
+  - kind: EntraGroup
+    resource: SRE-Platform-Oncall
+    permission: member
+  - kind: EntraGroup
+    resource: Platform Engineering - SRE
+    permission: member
+  - kind: EntraGroup
+    resource: platform-eng-all
+    permission: member
+---
+apiVersion: authzer/v1alpha1
+kind: Role
+metadata:
+  name: platform-sre-azure
+  labels:
+    team: platform-sre
+    provider: azure-rbac
+  annotations:
+    description: Azure RBAC role assignments for platform SRE operations
+rules:
+  - kind: AzureRoleAssignment
+    resource: /subscriptions/SUBSCRIPTION_ID
+    permission: Reader
+  - kind: AzureRoleAssignment
+    resource: /subscriptions/SUBSCRIPTION_ID/resourceGroups/PROD_RG
+    permission: Contributor
+---
+apiVersion: authzer/v1alpha1
+kind: Group
+metadata:
+  name: sre
+justification: "Platform SRE team member"
+---
+apiVersion: authzer/v1alpha1
+kind: RoleBinding
+metadata:
+  name: sre-portal-access
+subjects:
+  - kind: Group
+    name: sre
+roleRef:
+  kind: Role
+  name: platform-sre-portal
+---
+apiVersion: authzer/v1alpha1
+kind: RoleBinding
+metadata:
+  name: sre-entra-access
+subjects:
+  - kind: Group
+    name: sre
+roleRef:
+  kind: Role
+  name: platform-sre-entra
+---
+apiVersion: authzer/v1alpha1
+kind: RoleBinding
+metadata:
+  name: sre-azure-access
+subjects:
+  - kind: Group
+    name: sre
+roleRef:
+  kind: Role
+  name: platform-sre-azure

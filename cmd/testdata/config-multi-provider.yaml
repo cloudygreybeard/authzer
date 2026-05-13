@@ -1,0 +1,25 @@
+# Example config enabling all three providers.
+#
+# The CDP provider is always active (Entitlement rules). The entra and
+# azureRBAC providers require explicit opt-in.
+apiVersion: authzer/v1alpha1
+kind: Config
+
+group: sre
+justification: "Platform SRE team member"
+policy: policy-multi-provider.yaml
+
+cdp: http://127.0.0.1:9222
+concurrency: 3
+settleDelay: 1s
+renewWithinDays: 30
+
+providers:
+  entra:
+    enabled: true
+    # azBin: /usr/local/bin/az   # optional override
+
+  azureRBAC:
+    enabled: true
+    scope: /subscriptions/SUBSCRIPTION_ID
+    # azBin: /usr/local/bin/az   # optional override
