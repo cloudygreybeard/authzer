@@ -775,7 +775,7 @@ func renewMembership(ctx context.Context, name string, opts renewOpts) Resource 
 // listMemberships navigates to the memberships page, waits for the
 // table to render, evaluates the memberships-list JS script, and
 // returns structured membership data.
-func listMemberships(ctx context.Context, opts surveyOpts) ([]Membership, error) {
+func listMemberships(ctx context.Context, opts surveyOpts) ([]Assignment, error) {
 	logf := func(format string, args ...any) {
 		msg := fmt.Sprintf(format, args...)
 		logV(5, "%s", msg)
@@ -824,7 +824,7 @@ func listMemberships(ctx context.Context, opts surveyOpts) ([]Membership, error)
 	}
 	logV(6, "memberships result: %s", truncateForLog([]byte(raw), 2048))
 
-	var memberships []Membership
+	var memberships []Assignment
 	if err := json.Unmarshal([]byte(raw), &memberships); err != nil {
 		return nil, fmt.Errorf("memberships unmarshal: %w", err)
 	}

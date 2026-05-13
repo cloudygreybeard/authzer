@@ -32,14 +32,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// actionItem pairs a policy rule or portal membership with its
-// reconciliation action. For undeclared memberships, rule is zero-valued.
-type actionItem struct {
-	rule       Rule
-	membership *Membership
-	action     string
-}
-
 var applyCmd = &cobra.Command{
 	Use:   "apply [RESOURCE...]",
 	Short: "Reconcile memberships against RBAC policy",
@@ -159,8 +151,17 @@ func runApply(cmd *cobra.Command, args []string) error {
 		Timeout:     timeout,
 	}
 
-	logHuman("Fetching current memberships…\n")
-	memberships, err := listMemberships(browserCtx, opts)
+	reg, err := initBrowserRegistry(browserCtx, opts)
+	if err != nil {
+		return err
+	}
+	provider, err := reg.ForKind("Entitlement")
+	if err != nil {
+		return fmt.Errorf("no provider for Entitlement kind: %w", err)
+	}
+
+	logHuman("Fetching current memberships via %s…\n", provider.Name())
+	memberships, err := provider.List(ctx)
 	if err != nil {
 		return fmt.Errorf("listing memberships: %w", err)
 	}
@@ -170,19 +171,10 @@ func runApply(cmd *cobra.Command, args []string) error {
 	membershipsCachePath := filepath.Join(cacheDir, "memberships-cache.yaml")
 	_ = writeMembershipsCache(membershipsCachePath, memberships)
 
-	membershipByName := make(map[string]*Membership, len(memberships))
-	for i := range memberships {
-		membershipByName[memberships[i].Name] = &memberships[i]
-	}
-
 	detailsCache, _ := readCache(filepath.Join(cacheDir, "details-cache.yaml"))
 	nameByID := buildNameLookup(detailsCache)
 	termsLookup := buildTermsLookup(detailsCache)
 	termsTextLookup := buildTermsTextLookup(detailsCache)
-
-	var actionable []actionItem
-	var renewItems, requestItems, currentItems, excludedItems []summaryItem
-	var skipped int
 
 	excludeList := viper.GetStringSlice("excludeResources")
 	excluded := make(map[string]bool, len(excludeList))
@@ -190,8 +182,17 @@ func runApply(cmd *cobra.Command, args []string) error {
 		excluded[strings.ToLower(strings.TrimSpace(e))] = true
 	}
 
-	threshold := time.Now().AddDate(0, 0, renewWithinDays)
-	claimedNames := make(map[string]bool, len(rules))
+	reconcileInput := ReconcileInput{
+		Rules:       rules,
+		Assignments: memberships,
+		NameByID:    nameByID,
+		RenewWithin: time.Duration(renewWithinDays) * 24 * time.Hour,
+		ExcludeList: excluded,
+		Targeted:    args,
+	}
+	allActions := Reconcile(reconcileInput)
+	actionable := ActionableItems(allActions)
+	counts := CountByAction(allActions)
 
 	termsNote := func(name string) string {
 		if termsLookup[name] {
@@ -200,91 +201,42 @@ func runApply(cmd *cobra.Command, args []string) error {
 		return ""
 	}
 
-	isExcluded := func(name string) bool {
-		return excluded[strings.ToLower(name)]
-	}
-
-	for _, rule := range rules {
-		displayName := nameByID[rule.Resource]
-		m := membershipByName[displayName]
-
-		if m != nil {
-			claimedNames[m.Name] = true
-			if isExcluded(m.Name) {
-				excludedItems = append(excludedItems, summaryItem{
-					name: m.Name, expires: m.ExpirationDate,
-				})
-				continue
-			}
-			targeted := len(args) > 0
-			if targeted || isExpiringWithin(m.ExpirationDate, threshold) {
-				actionable = append(actionable, actionItem{
-					rule: rule, membership: m, action: "renew",
-				})
-				renewItems = append(renewItems, summaryItem{
-					name: m.Name, expires: m.ExpirationDate, note: termsNote(m.Name),
-				})
-			} else {
-				currentItems = append(currentItems, summaryItem{
-					name: m.Name, expires: m.ExpirationDate,
-				})
-			}
-		} else {
-			name := rule.Resource
-			if name == "" {
-				name = rule.SelfLink
-			}
-			if rule.SelfLink == "" {
-				skipped++
-				continue
-			}
-			actionable = append(actionable, actionItem{
-				rule: rule, action: "request",
-			})
-			requestItems = append(requestItems, summaryItem{
-				name: name, note: termsNote(name),
-			})
+	var renewItems, requestItems, currentItems, excludedItems []summaryItem
+	for _, ra := range allActions {
+		name := ra.Rule.Resource
+		if ra.Assignment != nil {
+			name = ra.Assignment.Name
 		}
-	}
+		expires := ""
+		if ra.Assignment != nil {
+			expires = ra.Assignment.ExpirationDate
+		}
+		si := summaryItem{name: name, expires: expires}
+		if strings.Contains(ra.Reason, "undeclared") {
+			si.action = "undeclared"
+		}
 
-	var undeclared int
-	if len(args) == 0 {
-		for i := range memberships {
-			m := &memberships[i]
-			if claimedNames[m.Name] {
-				continue
-			}
-			if isExcluded(m.Name) {
-				excludedItems = append(excludedItems, summaryItem{
-					name: m.Name, expires: m.ExpirationDate, action: "undeclared",
-				})
-				undeclared++
-				continue
-			}
-			if isExpiringWithin(m.ExpirationDate, threshold) {
-				actionable = append(actionable, actionItem{
-					membership: m, action: "renew",
-				})
-				renewItems = append(renewItems, summaryItem{
-					name: m.Name, expires: m.ExpirationDate,
-					note: termsNote(m.Name), action: "undeclared",
-				})
-			} else {
-				currentItems = append(currentItems, summaryItem{
-					name: m.Name, expires: m.ExpirationDate, action: "undeclared",
-				})
-			}
-			undeclared++
+		switch ra.Action {
+		case "renew":
+			si.note = termsNote(name)
+			renewItems = append(renewItems, si)
+		case "request":
+			si.note = termsNote(name)
+			requestItems = append(requestItems, si)
+		case "current":
+			currentItems = append(currentItems, si)
+		case "excluded":
+			excludedItems = append(excludedItems, si)
 		}
 	}
 
 	maxName := 0
-	allItems := make([]summaryItem, 0, len(renewItems)+len(requestItems)+len(currentItems)+len(excludedItems))
-	allItems = append(allItems, renewItems...)
-	allItems = append(allItems, requestItems...)
-	allItems = append(allItems, currentItems...)
-	allItems = append(allItems, excludedItems...)
-	for _, it := range allItems {
+	allSummary := make([]summaryItem, 0, len(renewItems)+len(requestItems)+len(currentItems)+len(excludedItems))
+	allSummary = append(allSummary, renewItems...)
+	allSummary = append(allSummary, requestItems...)
+	allSummary = append(allSummary, currentItems...)
+	allSummary = append(allSummary, excludedItems...)
+	for _, it := range allSummary {
 		if len(it.name) > maxName {
 			maxName = len(it.name)
 		}
@@ -325,27 +277,26 @@ func runApply(cmd *cobra.Command, args []string) error {
 	printGroup("excluded", excludedItems)
 
 	logHuman("\n")
-	logHuman("Policy: %d  Portal: %d (undeclared: %d, excluded: %d)\n",
-		len(rules), len(memberships), undeclared, len(excludedItems))
-	logHuman("Renew: %d  Request: %d  Current: %d  Skipped: %d\n",
-		len(renewItems), len(requestItems), len(currentItems), skipped)
+	logHuman("Policy: %d  Portal: %d (excluded: %d)\n",
+		len(rules), len(memberships), counts["excluded"])
+	logHuman("Renew: %d  Request: %d  Current: %d\n",
+		counts["renew"], counts["request"], counts["current"])
 
 	auditLog.Info("apply.plan", map[string]any{
-		"renew":   len(renewItems),
-		"request":  len(requestItems),
-		"current":  len(currentItems),
-		"excluded": len(excludedItems),
-		"skipped":  skipped,
+		"renew":    counts["renew"],
+		"request":  counts["request"],
+		"current":  counts["current"],
+		"excluded": counts["excluded"],
 		"policy":   len(rules),
 		"portal":   len(memberships),
 	})
 
 	if !acceptTerms {
 		hasAnyTerms := false
-		for _, it := range actionable {
-			name := it.rule.Resource
-			if it.membership != nil {
-				name = it.membership.Name
+		for _, ra := range actionable {
+			name := ra.Rule.Resource
+			if ra.Assignment != nil {
+				name = ra.Assignment.Name
 			}
 			if termsLookup[name] {
 				hasAnyTerms = true
@@ -363,16 +314,7 @@ func runApply(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	var renewals, requests []actionItem
-	for _, it := range actionable {
-		switch it.action {
-		case "renew":
-			renewals = append(renewals, it)
-		default:
-			requests = append(requests, it)
-		}
-	}
-
+	isDryRun := mode != DryRunNone
 	var completed atomic.Int32
 	var succeeded, failed int
 	totalActions := len(actionable)
@@ -380,158 +322,94 @@ func runApply(cmd *cobra.Command, args []string) error {
 	var resultsMu sync.Mutex
 	var results []Action
 
-	reportResult := func(it actionItem, res Resource) {
-		n := completed.Add(1)
-		label := it.rule.Resource
-		if it.membership != nil {
-			label = it.membership.Name
+	sem := make(chan struct{}, concurrency)
+	var wg sync.WaitGroup
+
+	for _, item := range actionable {
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			logHuman("\nAborted.\n")
+			auditLog.Warn("apply.aborted", map[string]any{"phase": item.Action})
+			break
 		}
-		if termsText := termsTextLookup[label]; termsText != "" && termsLookup[label] {
-			if acceptTerms {
+
+		wg.Add(1)
+		go func(ra ReconcileAction) {
+			defer wg.Done()
+			defer func() { <-sem }()
+
+			label := ra.Rule.Resource
+			if ra.Assignment != nil {
+				label = ra.Assignment.Name
+			}
+
+			if termsText := termsTextLookup[label]; termsText != "" && termsLookup[label] && acceptTerms {
 				logHuman("  [%d/%d] %s/%s T&Cs: %s\n",
-					n, totalActions, it.action, label, termsText)
+					completed.Load()+1, totalActions, ra.Action, label, termsText)
 				auditLog.Info("apply.terms", map[string]any{
 					"name":  label,
 					"terms": termsText,
 				})
 			}
-		}
 
-		act := Action{
-			Name:   label,
-			Action: it.action,
-		}
-		if it.membership != nil {
-			act.ID = it.membership.ID
-			act.CurrentRole = it.membership.Role
-		}
-		if it.rule.Resource != "" {
-			act.ID = it.rule.Resource
-			act.DesiredRole = it.rule.Permission
-			act.SelfLink = it.rule.SelfLink
-		}
+			result, applyErr := provider.Apply(ctx, ra.Rule, justification, isDryRun)
+			n := completed.Add(1)
 
-		if res.Error != "" {
-			act.Error = res.Error
-			act.Reason = "failed"
-			if mode == DryRunServer {
-				logHuman("  [%d/%d] %s/%s … FAILED, tab open (%s)\n",
-					n, totalActions, it.action, label, res.Error)
-			} else {
-				logHuman("  [%d/%d] %s/%s … FAILED (%s)\n",
-					n, totalActions, it.action, label, res.Error)
+			act := Action{
+				Name:   label,
+				Action: ra.Action,
 			}
-			auditLog.Error("apply."+it.action+".fail", act)
-			resultsMu.Lock()
-			failed++
-			results = append(results, act)
-			resultsMu.Unlock()
-		} else {
-			switch mode {
-			case DryRunServer:
-				act.Reason = "prepared"
-				hasTerms := termsLookup[label]
-				if hasTerms && !acceptTerms {
-					act.Reason = "prepared, terms not accepted"
-					logHuman("  [%d/%d] %s/%s … prepared, terms not accepted (tab open)\n",
-						n, totalActions, it.action, label)
-				} else {
-					logHuman("  [%d/%d] %s/%s … prepared (tab open)\n",
-						n, totalActions, it.action, label)
-				}
-				auditLog.Info("apply."+it.action+".ok", act)
-			case DryRunNone:
-				act.Reason = "applied"
-				logHuman("  [%d/%d] %s/%s … done\n",
-					n, totalActions, it.action, label)
-				auditLog.Info("apply."+it.action+".ok", act)
+			if ra.Assignment != nil {
+				act.ID = ra.Assignment.ID
+				act.CurrentRole = ra.Assignment.Role
 			}
+			if ra.Rule.Resource != "" {
+				act.ID = ra.Rule.Resource
+				act.DesiredRole = ra.Rule.Permission
+				act.SelfLink = ra.Rule.SelfLink
+			}
+
+			if applyErr != nil {
+				act.Error = applyErr.Error()
+				act.Reason = "failed"
+				logHuman("  [%d/%d] %s/%s … FAILED (%v)\n", n, totalActions, ra.Action, label, applyErr)
+				auditLog.Error("apply."+ra.Action+".fail", act)
+				resultsMu.Lock()
+				failed++
+				results = append(results, act)
+				resultsMu.Unlock()
+				return
+			}
+
+			act.Reason = result.Action
+			if result.Error != nil {
+				act.Error = result.Error.Error()
+				act.Reason = "failed"
+				logHuman("  [%d/%d] %s/%s … FAILED (%s)\n", n, totalActions, ra.Action, label, result.Message)
+				auditLog.Error("apply."+ra.Action+".fail", act)
+				resultsMu.Lock()
+				failed++
+				results = append(results, act)
+				resultsMu.Unlock()
+				return
+			}
+
+			logHuman("  [%d/%d] %s/%s … %s\n", n, totalActions, ra.Action, label, result.Message)
+			auditLog.Info("apply."+ra.Action+".ok", act)
 			resultsMu.Lock()
 			succeeded++
 			results = append(results, act)
 			resultsMu.Unlock()
-		}
+		}(item)
 	}
-
-	{
-		sem := make(chan struct{}, concurrency)
-		var wg sync.WaitGroup
-
-	renewLoop:
-		for _, item := range renewals {
-			select {
-			case sem <- struct{}{}:
-			case <-ctx.Done():
-				logHuman("\nAborted.\n")
-				auditLog.Warn("apply.aborted", map[string]any{"phase": "renew"})
-				break renewLoop
-			}
-
-			wg.Add(1)
-			go func(it actionItem) {
-				defer wg.Done()
-				defer func() { <-sem }()
-
-				rOpts := renewOpts{
-					SettleDelay:   settleDelay,
-					Timeout:       timeout,
-					Justification: justification,
-					DryRun:        mode,
-					AcceptTerms:   acceptTerms,
-				}
-				res := renewMembership(browserCtx, it.membership.Name, rOpts)
-				reportResult(it, res)
-			}(item)
-		}
-		wg.Wait()
-	}
-
-	{
-		sem := make(chan struct{}, concurrency)
-		var wg sync.WaitGroup
-
-	requestLoop:
-		for _, item := range requests {
-			select {
-			case sem <- struct{}{}:
-			case <-ctx.Done():
-				logHuman("\nAborted.\n")
-				auditLog.Warn("apply.aborted", map[string]any{"phase": "request"})
-				break requestLoop
-			}
-
-			wg.Add(1)
-			go func(it actionItem) {
-				defer wg.Done()
-				defer func() { <-sem }()
-
-				rOpts := renewOpts{
-					SettleDelay:   settleDelay,
-					Timeout:       timeout,
-					Permission:    it.rule.Permission,
-					Justification: justification,
-					DryRun:        mode,
-					AcceptTerms:   acceptTerms,
-				}
-				kind := it.rule.Kind
-				if kind == "" {
-					kind = "Resource"
-				}
-				res := renewResource(browserCtx, it.rule.SelfLink, kind, rOpts)
-				reportResult(it, res)
-			}(item)
-		}
-		wg.Wait()
-	}
+	wg.Wait()
 
 	logHuman("\n")
-	switch mode {
-	case DryRunServer:
-		logHuman("Done. %d forms prepared, %d failed. Tabs left open for review.\n",
-			succeeded, failed)
-	case DryRunNone:
-		logHuman("Done. %d applied, %d failed.\n",
-			succeeded, failed)
+	if isDryRun {
+		logHuman("Done. %d prepared, %d failed.\n", succeeded, failed)
+	} else {
+		logHuman("Done. %d applied, %d failed.\n", succeeded, failed)
 	}
 
 	auditLog.Info("apply.done", map[string]any{
@@ -548,9 +426,9 @@ func runApply(cmd *cobra.Command, args []string) error {
 			DryRun:        mode,
 			TotalItems:    len(results),
 			Summary: ApplySummary{
-				Renew:  countAction(actionable, "renew"),
-				Request: countAction(actionable, "request"),
-				Current: len(currentItems),
+				Renew:   counts["renew"],
+				Request: counts["request"],
+				Current: counts["current"],
 				Failed:  failed,
 			},
 			Items: results,
@@ -596,12 +474,12 @@ func runApplyClient(rules []Rule, justification string, renewWithinDays int, gro
 	cacheDir := cacheDirectory()
 	membershipsCachePath := filepath.Join(cacheDir, "memberships-cache.yaml")
 
-	var memberships []Membership
+	var memberships []Assignment
 	if data, err := os.ReadFile(membershipsCachePath); err == nil {
 		_ = yaml.Unmarshal(data, &memberships)
 	}
 
-	membershipByName := make(map[string]*Membership, len(memberships))
+	membershipByName := make(map[string]*Assignment, len(memberships))
 	for i := range memberships {
 		membershipByName[memberships[i].Name] = &memberships[i]
 	}
@@ -776,7 +654,7 @@ skipUndeclared:
 		len(renewItems), len(requestItems), len(currentItems))
 
 	auditLog.Info("apply.plan", map[string]any{
-		"renew":   len(renewItems),
+		"renew":    len(renewItems),
 		"request":  len(requestItems),
 		"current":  len(currentItems),
 		"excluded": len(excludedItems),
@@ -791,8 +669,8 @@ skipUndeclared:
 
 	logHuman("\nClient dry-run complete.\n")
 	auditLog.Info("apply.done", map[string]any{
-		"dryRun": DryRunClient,
-		"renew": len(renewItems),
+		"dryRun":  DryRunClient,
+		"renew":   len(renewItems),
 		"request": len(requestItems),
 		"current": len(currentItems),
 	})
@@ -805,7 +683,7 @@ skipUndeclared:
 			DryRun:        DryRunClient,
 			TotalItems:    len(items),
 			Summary: ApplySummary{
-				Renew:  len(renewItems),
+				Renew:   len(renewItems),
 				Request: len(requestItems),
 				Current: len(currentItems),
 			},
@@ -928,12 +806,3 @@ func parseDays(s string) (int, error) {
 	return n, nil
 }
 
-func countAction(items []actionItem, action string) int {
-	count := 0
-	for _, it := range items {
-		if it.action == action {
-			count++
-		}
-	}
-	return count
-}

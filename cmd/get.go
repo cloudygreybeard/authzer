@@ -74,6 +74,7 @@ func runGet(cmd *cobra.Command, args []string) error {
 	settleDelay := viper.GetDuration("settleDelay")
 	timeout := viper.GetDuration("survey.timeout")
 	concurrency := viper.GetInt("concurrency")
+	backend := viper.GetString("backend")
 
 	logHuman("Dry-run:  %s\n", mode)
 	auditLog.Info("get.start", map[string]any{"dryRun": mode, "args": args})
@@ -88,7 +89,11 @@ func runGet(cmd *cobra.Command, args []string) error {
 	}
 
 	wsBase := strings.Replace(endpoint, "http://", "ws://", 1)
-	logHuman("CDP:      %s\n", endpoint)
+	if backend == "api" {
+		logHuman("CDP:      %s (cookie extraction only)\n", endpoint)
+	} else {
+		logHuman("CDP:      %s\n", endpoint)
+	}
 	logHuman("\nConnecting to browser at %s…\n\n", wsBase)
 
 	browserCtx, browserCancel := connectBrowser(ctx, wsBase)
@@ -99,7 +104,17 @@ func runGet(cmd *cobra.Command, args []string) error {
 		Timeout:     timeout,
 	}
 
-	memberships, err := listMemberships(browserCtx, opts)
+	reg, err := initBrowserRegistry(browserCtx, opts)
+	if err != nil {
+		return err
+	}
+	provider, err := reg.ForKind("Entitlement")
+	if err != nil {
+		return fmt.Errorf("no provider for Entitlement kind: %w", err)
+	}
+
+	logHuman("Fetching memberships via %s…\n", provider.Name())
+	memberships, err := provider.List(ctx)
 	if err != nil {
 		return fmt.Errorf("listing memberships: %w", err)
 	}
@@ -114,7 +129,7 @@ func runGet(cmd *cobra.Command, args []string) error {
 	cachePath := filepath.Join(cacheDir, "details-cache.yaml")
 	var details []Resource
 
-	needDeep := refresh || !cacheFileExists(cachePath)
+	needDeep := backend != "api" && (refresh || !cacheFileExists(cachePath))
 	if needDeep {
 		group, err := requireGroup()
 		if err != nil {
@@ -183,7 +198,7 @@ func runGet(cmd *cobra.Command, args []string) error {
 	outputMemberships := memberships
 	outputDetails := details
 	if len(args) > 0 {
-		outputMemberships = filterMemberships(memberships, args)
+		outputMemberships = filterAssignments(memberships, args)
 		outputDetails = filterDetailsByArgs(details, args)
 	} else {
 		printComplianceSummary(memberships, details)
@@ -313,7 +328,16 @@ func printGetOutput(data GetData, format, outputFile string) error {
 	return err
 }
 
-func formatTable(items []Membership, wide bool) []byte {
+func formatTable(items []Assignment, wide bool) []byte {
+	var entitlements, groups []Assignment
+	for _, m := range items {
+		if m.Kind == "Group" {
+			groups = append(groups, m)
+		} else {
+			entitlements = append(entitlements, m)
+		}
+	}
+
 	var sb strings.Builder
 	w := tabwriter.NewWriter(&sb, 0, 4, 2, ' ', 0)
 
@@ -323,22 +347,51 @@ func formatTable(items []Membership, wide bool) []byte {
 		_, _ = fmt.Fprintln(w, "NAME\tID\tROLE\tEXPIRES\tSTATUS")
 	}
 
-	for _, m := range items {
-		status := "ok"
-		if m.Expiring {
-			status = "expiring"
-		}
-		expires := m.ExpirationDate
-		if wide {
-			_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
-				m.Name, m.ID, m.Role, m.Account, expires, status)
-		} else {
-			_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
-				m.Name, m.ID, m.Role, expires, status)
-		}
+	for _, m := range entitlements {
+		writeTableRow(w, m, wide)
 	}
 	_ = w.Flush()
+
+	if len(groups) > 0 {
+		sb.WriteString("\nGroups:\n")
+		gw := tabwriter.NewWriter(&sb, 0, 4, 2, ' ', 0)
+		_, _ = fmt.Fprintln(gw, "NAME\tEXPIRES")
+		for _, g := range groups {
+			_, _ = fmt.Fprintf(gw, "%s\t%s\n", g.Name, shortTimestamp(g.ExpirationDate))
+		}
+		_ = gw.Flush()
+	}
+
 	return []byte(sb.String())
+}
+
+func writeTableRow(w *tabwriter.Writer, m Assignment, wide bool) {
+	status := "ok"
+	if m.Expiring {
+		status = "expiring"
+	}
+	expires := shortTimestamp(m.ExpirationDate)
+	if wide {
+		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
+			m.Name, m.ID, m.Role, m.Account, expires, status)
+	} else {
+		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
+			m.Name, m.ID, m.Role, expires, status)
+	}
+}
+
+func shortTimestamp(ts string) string {
+	if ts == "" {
+		return ""
+	}
+	t, err := time.Parse(time.RFC3339Nano, ts)
+	if err != nil {
+		t, err = time.Parse(time.RFC3339, ts)
+	}
+	if err != nil {
+		return ts
+	}
+	return t.Format("2006-01-02 15:04")
 }
 
 func printCachedGet(format, outputFile string, args []string) error {
@@ -346,9 +399,9 @@ func printCachedGet(format, outputFile string, args []string) error {
 	membershipsPath := filepath.Join(cacheDir, "memberships-cache.yaml")
 	detailsPath := filepath.Join(cacheDir, "details-cache.yaml")
 
-	var memberships []Membership
+	var assignments []Assignment
 	if data, err := os.ReadFile(membershipsPath); err == nil {
-		_ = yaml.Unmarshal(data, &memberships)
+		_ = yaml.Unmarshal(data, &assignments)
 	}
 
 	var details []Resource
@@ -356,20 +409,20 @@ func printCachedGet(format, outputFile string, args []string) error {
 		_ = yaml.Unmarshal(data, &details)
 	}
 
-	if len(memberships) == 0 {
+	if len(assignments) == 0 {
 		logHuman("No cached membership data. Run 'authzer get' with browser access first.\n")
 		return nil
 	}
 
 	if len(args) > 0 {
-		memberships = filterMemberships(memberships, args)
+		assignments = filterAssignments(assignments, args)
 		details = filterDetailsByArgs(details, args)
 	}
 
 	getdata := GetData{
 		Updated:    "(cached)",
-		TotalItems: len(memberships),
-		Items:      memberships,
+		TotalItems: len(assignments),
+		Items:      assignments,
 		Details:    details,
 	}
 	return printGetOutput(getdata, format, outputFile)
@@ -411,7 +464,7 @@ func readCache(path string) ([]Resource, error) {
 	return details, nil
 }
 
-func printComplianceSummary(memberships []Membership, details []Resource) {
+func printComplianceSummary(memberships []Assignment, details []Resource) {
 	group, groupErr := requireGroup()
 	if groupErr != nil {
 		return
@@ -439,6 +492,9 @@ func printComplianceSummary(memberships []Membership, details []Resource) {
 
 	var managed, undeclared int
 	for _, m := range memberships {
+		if m.Kind == "Group" {
+			continue
+		}
 		if ruleNames[m.Name] {
 			managed++
 		} else {
@@ -471,9 +527,9 @@ func printComplianceSummary(memberships []Membership, details []Resource) {
 	logHuman("\n")
 }
 
-func filterMemberships(memberships []Membership, args []string) []Membership {
-	var out []Membership
-	for _, m := range memberships {
+func filterAssignments(assignments []Assignment, args []string) []Assignment {
+	var out []Assignment
+	for _, m := range assignments {
 		for _, arg := range args {
 			if strings.EqualFold(m.Name, arg) || strings.EqualFold(m.ID, arg) {
 				out = append(out, m)
@@ -497,7 +553,7 @@ func filterDetailsByArgs(details []Resource, args []string) []Resource {
 	return out
 }
 
-func writeMembershipsCache(path string, memberships []Membership) error {
+func writeMembershipsCache(path string, memberships []Assignment) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
 	}
