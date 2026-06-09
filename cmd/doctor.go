@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"runtime"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -134,7 +135,11 @@ func runDoctor(cmd *cobra.Command, _ []string) error {
 			printCheck("CDP endpoint", endpoint, "ok", "reachable")
 		}
 	} else {
-		printCheck("CDP endpoint", endpoint, "error", "not reachable; run: authzer launch")
+		hint := "not reachable; run: authzer launch"
+		if runtime.GOOS == "linux" && isWSL() {
+			hint = "not reachable (WSL detected — browser may be on Windows side)"
+		}
+		printCheck("CDP endpoint", endpoint, "error", hint)
 		issues++
 	}
 
