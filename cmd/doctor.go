@@ -88,6 +88,19 @@ func runDoctor(cmd *cobra.Command, _ []string) error {
 		}
 	}
 
+	// Backend mode
+	backend := viper.GetString("backend")
+	if backend == "" {
+		backend = "cdp"
+	}
+	source := "from config"
+	if cmd.Flags().Changed("backend") {
+		source = "from --backend flag"
+	} else if os.Getenv("AUTHZER_BACKEND") != "" {
+		source = "from AUTHZER_BACKEND env"
+	}
+	printCheck("Backend", backend, "ok", source+" (override with --backend)")
+
 	// Browser binary
 	browserPath := viper.GetString("browser.path")
 	if browserPath != "" {

@@ -24,6 +24,7 @@ import (
 	"strings"
 	"sync"
 	"text/template"
+	"time"
 
 	"github.com/chromedp/chromedp"
 )
@@ -80,6 +81,11 @@ func newAPIProviderHTTP(backend *APIBackend, client *http.Client, kinds []string
 // triggers SSO and establishes session cookies for the API origin.
 // Subsequent same-origin XHR calls from this tab inherit those
 // cookies.
+//
+// After the initial navigation, the function polls the current URL
+// to wait for SSO redirects to complete and return to the API origin.
+// If the browser remains on an external domain (e.g. an identity
+// provider login page), the user is prompted to complete sign-in.
 func (p *APIProvider) ensureTab() error {
 	if p.tabCtx != nil {
 		return nil
@@ -98,6 +104,39 @@ func (p *APIProvider) ensureTab() error {
 		chromedp.WaitReady("body", chromedp.ByQuery),
 	); err != nil {
 		return fmt.Errorf("navigating to API login %s: %w", loginURL, err)
+	}
+
+	// Wait for SSO redirects to settle back on the API origin.
+	apiOrigin := p.backend.Spec.BaseURL
+	timeout := 30 * time.Second
+	deadline := time.Now().Add(timeout)
+	settled := false
+
+	for time.Now().Before(deadline) {
+		var currentURL string
+		if err := chromedp.Run(tabCtx,
+			chromedp.Location(&currentURL),
+		); err != nil {
+			break
+		}
+		logV(5, "api: current URL: %s", currentURL)
+
+		if strings.HasPrefix(currentURL, apiOrigin) {
+			settled = true
+			break
+		}
+
+		// Still on a login/redirect page -- wait and retry.
+		logV(3, "api: waiting for SSO redirect (current: %s)", currentURL)
+		time.Sleep(2 * time.Second)
+	}
+
+	if !settled {
+		var currentURL string
+		_ = chromedp.Run(tabCtx, chromedp.Location(&currentURL))
+		logHuman("\nWarning: SSO redirect did not return to %s\n", apiOrigin)
+		logHuman("  The browser may be on a login page: %s\n", currentURL)
+		logHuman("  Complete sign-in in the browser, then retry.\n\n")
 	}
 
 	p.tabCtx = tabCtx

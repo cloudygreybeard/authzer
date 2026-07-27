@@ -49,7 +49,12 @@ func initRegistry() *Registry {
 func initBrowserRegistry(browserCtx context.Context, opts surveyOpts) (*Registry, error) {
 	reg := NewRegistry()
 
-	if viper.GetString("backend") == "api" {
+	backend := viper.GetString("backend")
+	if err := validateBackend(backend); err != nil {
+		return nil, err
+	}
+
+	if backend == "api" {
 		ab, err := loadAPIBackend()
 		if err != nil {
 			return nil, fmt.Errorf("loading API backend: %w", err)
