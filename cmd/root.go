@@ -73,6 +73,7 @@ func init() {
 	rootCmd.PersistentFlags().String("log-file", "", `structured JSONL log destination (path, "-" for stdout, "stderr" for stderr)`)
 	rootCmd.PersistentFlags().String("log-level", "info", `minimum log level: debug, info, warn, error`)
 	rootCmd.PersistentFlags().BoolP("quiet", "q", false, "suppress human-readable stderr output")
+	rootCmd.PersistentFlags().String("backend", "", `backend mode: "api" or "cdp" (overrides config)`)
 }
 
 // cdpURL returns the CDP HTTP endpoint, derived from the --cdp flag if
@@ -113,6 +114,16 @@ func requireGroup() (string, error) {
 		return "", fmt.Errorf("no group configured (set --group, AUTHZER_GROUP, or group in config.yaml)")
 	}
 	return g, nil
+}
+
+// validateBackend checks that the backend value is valid. An empty
+// string is allowed (defaults to CDP). Returns a user-facing error
+// for unrecognised values.
+func validateBackend(backend string) error {
+	if backend != "" && backend != "api" && backend != "cdp" {
+		return fmt.Errorf("invalid backend %q: must be \"api\" or \"cdp\"", backend)
+	}
+	return nil
 }
 
 // allURLArgs returns true if every argument is a URL (http:// or https://),
@@ -276,6 +287,7 @@ func initConfig(cmd *cobra.Command) error {
 	_ = viper.BindPFlag("log.file", cmd.Flags().Lookup("log-file"))
 	_ = viper.BindPFlag("log.level", cmd.Flags().Lookup("log-level"))
 	_ = viper.BindPFlag("quiet", cmd.Flags().Lookup("quiet"))
+	_ = viper.BindPFlag("backend", cmd.Flags().Lookup("backend"))
 
 	quiet = viper.GetBool("quiet")
 

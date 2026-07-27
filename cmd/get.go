@@ -75,6 +75,9 @@ func runGet(cmd *cobra.Command, args []string) error {
 	timeout := viper.GetDuration("survey.timeout")
 	concurrency := viper.GetInt("concurrency")
 	backend := viper.GetString("backend")
+	if err := validateBackend(backend); err != nil {
+		return err
+	}
 
 	logHuman("Dry-run:  %s\n", mode)
 	auditLog.Info("get.start", map[string]any{"dryRun": mode, "args": args})
@@ -476,18 +479,25 @@ func printComplianceSummary(memberships []Assignment, details []Resource) {
 
 	nameByID := buildNameLookup(details)
 
+	// Build sets of membership identifiers (both name and ID) for matching.
 	membershipNames := make(map[string]bool, len(memberships))
+	membershipIDs := make(map[string]bool, len(memberships))
 	for _, m := range memberships {
 		membershipNames[m.Name] = true
+		if m.ID != "" {
+			membershipIDs[m.ID] = true
+		}
 	}
 
+	// Build a set of rule identifiers. Each rule can be matched by its
+	// resource ID or by the display name from the details cache.
+	ruleIDs := make(map[string]bool, len(rules))
 	ruleNames := make(map[string]bool, len(rules))
 	for _, r := range rules {
-		name := nameByID[r.Resource]
-		if name == "" {
-			name = r.Resource
+		ruleIDs[r.Resource] = true
+		if name := nameByID[r.Resource]; name != "" {
+			ruleNames[name] = true
 		}
-		ruleNames[name] = true
 	}
 
 	var managed, undeclared int
@@ -495,7 +505,7 @@ func printComplianceSummary(memberships []Assignment, details []Resource) {
 		if m.Kind == "Group" {
 			continue
 		}
-		if ruleNames[m.Name] {
+		if ruleNames[m.Name] || ruleIDs[m.ID] {
 			managed++
 		} else {
 			undeclared++
@@ -508,7 +518,7 @@ func printComplianceSummary(memberships []Assignment, details []Resource) {
 		if name == "" {
 			name = r.Resource
 		}
-		if !membershipNames[name] {
+		if !membershipNames[name] && !membershipIDs[r.Resource] {
 			missing = append(missing, name)
 		}
 	}
